@@ -53,6 +53,174 @@ const normalizeType = (
   return type || "SYSTEM";
 };
 
+/* =========================
+   PUSH CHANNEL RESOLVER
+========================= */
+
+const ANDROID_DEFAULT_CHANNEL =
+  "karto_default";
+
+const ANDROID_NEW_ORDER_CHANNEL =
+  "karto_new_orders";
+
+const ANDROID_DEFAULT_SOUND =
+  "default";
+
+const ANDROID_NEW_ORDER_SOUND =
+  "new_order";
+
+const normalizeUpper = (
+  value
+) =>
+  cleanText(value)
+    .toUpperCase();
+
+const isVendorNewOrderPush = ({
+  type,
+  data = {},
+}) => {
+  const finalType =
+    normalizeType(type);
+
+  const event =
+    normalizeUpper(
+      data?.event
+    );
+
+  const notificationKind =
+    normalizeUpper(
+      data?.notificationKind
+    );
+
+  const target =
+    normalizeUpper(
+      data?.target
+    );
+
+  return (
+    finalType === "ORDER" &&
+    (
+      event === "NEW_ORDER" ||
+      notificationKind ===
+        "VENDOR_NEW_ORDER"
+    ) &&
+    (
+      !target ||
+      target === "VENDOR"
+    )
+  );
+};
+
+const isRiderNewOrderPush = ({
+  type,
+  data = {},
+}) => {
+  const finalType =
+    normalizeType(type);
+
+  const event =
+    normalizeUpper(
+      data?.event
+    );
+
+  const notificationKind =
+    normalizeUpper(
+      data?.notificationKind
+    );
+
+  const target =
+    normalizeUpper(
+      data?.target
+    );
+
+  return (
+    finalType === "ORDER" &&
+    (
+      event ===
+        "NEW_RIDER_ORDER" ||
+      event ===
+        "NEW_ORDER_ASSIGNMENT" ||
+      notificationKind ===
+        "RIDER_NEW_ORDER"
+    ) &&
+    (
+      !target ||
+      target === "RIDER"
+    )
+  );
+};
+
+/*
+ * SOUND FALLBACK:
+ * 1) Recognized Vendor/Rider new-order push -> "new_order" on "karto_new_orders"
+ * 2) Any other/specific type not matched -> supplied sound/channel if present
+ * 3) If nothing specific is supplied -> Android "default" sound on "karto_default"
+ */
+const resolveAndroidPushConfig = ({
+  type,
+  data = {},
+  androidChannelId,
+  androidSound,
+  androidVibrate,
+}) => {
+  const isNewOrderAlert =
+    isVendorNewOrderPush({
+      type,
+      data,
+    }) ||
+    isRiderNewOrderPush({
+      type,
+      data,
+    });
+
+  /*
+   * Vendor/Rider new-order alerts must always use
+   * the high-importance native channel created by
+   * MainApplication.kt and the bundled raw sound:
+   *
+   * android/app/src/main/res/raw/new_order.mp3
+   *
+   * Customer/general notifications continue to use
+   * the normal/default channel unless a caller
+   * explicitly supplies another override.
+   */
+  if (isNewOrderAlert) {
+    return {
+      channelId:
+        ANDROID_NEW_ORDER_CHANNEL,
+
+      sound:
+        ANDROID_NEW_ORDER_SOUND,
+
+      vibrate:
+        true,
+
+      isNewOrderAlert:
+        true,
+    };
+  }
+
+  return {
+    channelId:
+      cleanText(
+        androidChannelId
+      ) ||
+      ANDROID_DEFAULT_CHANNEL,
+
+    sound:
+      cleanText(
+        androidSound
+      ) ||
+      ANDROID_DEFAULT_SOUND,
+
+    vibrate:
+      androidVibrate !== false,
+
+    isNewOrderAlert:
+      false,
+  };
+};
+
 const getActivePushTokens = async (
   userId
 ) => {
@@ -182,8 +350,8 @@ export const sendPushToUser = async ({
 
   // Optional push overrides.
   // Existing callers can ignore these and will keep the default channel/sound.
-  androidChannelId = "karto_default",
-  androidSound = "default",
+  androidChannelId = ANDROID_DEFAULT_CHANNEL,
+  androidSound = ANDROID_DEFAULT_SOUND,
   androidVibrate = true,
 }) => {
   const finalUserId =
@@ -197,6 +365,21 @@ export const sendPushToUser = async ({
 
   const finalType =
     normalizeType(type);
+
+
+  const androidPushConfig =
+    resolveAndroidPushConfig({
+      type:
+        finalType,
+
+      data,
+
+      androidChannelId,
+
+      androidSound,
+
+      androidVibrate,
+    });
 
   if (
     !finalUserId ||
@@ -297,24 +480,42 @@ export const sendPushToUser = async ({
         ),
 
       android: {
+        /*
+         * High delivery priority wakes Android promptly.
+         * Android 8+ visual/sound importance is controlled
+         * by the notification channel itself.
+         */
         priority: "high",
 
         notification: {
-          // For custom Android sounds pass the raw resource name
-          // without extension, e.g. "new_order".
+          /*
+           * New Vendor/Rider orders:
+           *   channelId = karto_new_orders
+           *   sound     = new_order
+           *
+           * Other notifications:
+           *   normal/default channel and sound.
+           */
           sound:
-            cleanText(androidSound) ||
-            "default",
+            androidPushConfig.sound,
 
           channelId:
-            cleanText(androidChannelId) ||
-            "karto_default",
+            androidPushConfig.channelId,
 
           defaultVibrateTimings:
-            androidVibrate !== false,
+            androidPushConfig.vibrate,
 
           visibility:
             "public",
+
+          /*
+           * Useful on Android 7.1 and below.
+           * Android 8+ uses channel importance.
+           */
+          priority:
+            androidPushConfig.isNewOrderAlert
+              ? "max"
+              : "high",
         },
       },
 
@@ -441,8 +642,8 @@ export const sendPushToUsers = async ({
   body,
   data = {},
   saveToDb = true,
-  androidChannelId = "karto_default",
-  androidSound = "default",
+  androidChannelId = ANDROID_DEFAULT_CHANNEL,
+  androidSound = ANDROID_DEFAULT_SOUND,
   androidVibrate = true,
 }) => {
   const ids =
