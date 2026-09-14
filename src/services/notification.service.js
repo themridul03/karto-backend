@@ -58,7 +58,7 @@ const normalizeType = (
 ========================= */
 
 const ANDROID_NEW_ORDER_CHANNEL =
-  "karto_new_orders";
+  "karto_new_orders_v2";
 
 const ANDROID_DEFAULT_SOUND =
   "default";
