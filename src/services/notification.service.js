@@ -57,9 +57,6 @@ const normalizeType = (
    PUSH CHANNEL RESOLVER
 ========================= */
 
-const ANDROID_DEFAULT_CHANNEL =
-  "karto_default";
-
 const ANDROID_NEW_ORDER_CHANNEL =
   "karto_new_orders";
 
@@ -151,10 +148,10 @@ const isRiderNewOrderPush = ({
 };
 
 /*
- * SOUND FALLBACK:
- * 1) Recognized Vendor/Rider new-order push -> "new_order" on "karto_new_orders"
- * 2) Any other/specific type not matched -> supplied sound/channel if present
- * 3) If nothing specific is supplied -> Android "default" sound on "karto_default"
+ * SOUND / CHANNEL RULES:
+ * 1) Vendor/Rider NEW ORDER -> "new_order" on "karto_new_orders"
+ * 2) Other notifications -> Android/Firebase default channel + default sound
+ * 3) A caller may still explicitly supply another channel/sound override
  */
 const resolveAndroidPushConfig = ({
   type,
@@ -201,11 +198,15 @@ const resolveAndroidPushConfig = ({
   }
 
   return {
+    /*
+     * For normal notifications do not force a custom Android channel.
+     * If channelId is null, Firebase/Android uses the app's normal
+     * default/fallback notification channel.
+     */
     channelId:
       cleanText(
         androidChannelId
-      ) ||
-      ANDROID_DEFAULT_CHANNEL,
+      ) || null,
 
     sound:
       cleanText(
@@ -349,8 +350,9 @@ export const sendPushToUser = async ({
   saveToDb = true,
 
   // Optional push overrides.
-  // Existing callers can ignore these and will keep the default channel/sound.
-  androidChannelId = ANDROID_DEFAULT_CHANNEL,
+  // Normal notifications use Android/Firebase default channel + sound.
+  // New-order notifications are forced to karto_new_orders + new_order.
+  androidChannelId = null,
   androidSound = ANDROID_DEFAULT_SOUND,
   androidVibrate = true,
 }) => {
@@ -499,8 +501,18 @@ export const sendPushToUser = async ({
           sound:
             androidPushConfig.sound,
 
-          channelId:
-            androidPushConfig.channelId,
+          /*
+           * Only force a channel when one is explicitly resolved.
+           * New-order alerts resolve to "karto_new_orders".
+           * General notifications omit channelId and use Android/Firebase
+           * default/fallback notification channel.
+           */
+          ...(androidPushConfig.channelId
+            ? {
+                channelId:
+                  androidPushConfig.channelId,
+              }
+            : {}),
 
           defaultVibrateTimings:
             androidPushConfig.vibrate,
@@ -642,7 +654,7 @@ export const sendPushToUsers = async ({
   body,
   data = {},
   saveToDb = true,
-  androidChannelId = ANDROID_DEFAULT_CHANNEL,
+  androidChannelId = null,
   androidSound = ANDROID_DEFAULT_SOUND,
   androidVibrate = true,
 }) => {
