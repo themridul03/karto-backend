@@ -24,6 +24,7 @@ import reviewRoutes from "./routes/review.routes.js";
 import recentlyViewedRoutes from "./routes/recentlyViewed.routes.js";
 import couponRoutes from "./routes/coupon.routes.js";
 import pushRoutes from "./routes/push.routes.js";
+import pushTokenRoutes from "./routes/pushToken.routes.js";
 import uploadRoutes from "./routes/upload.routes.js";
 
 dotenv.config();
@@ -356,6 +357,7 @@ app.use("/api/admin", adminVendorRoutes);
 app.use("/api/recently-viewed", recentlyViewedRoutes);
 app.use("/api/coupons", couponRoutes);
 app.use("/api/push", pushRoutes);
+app.use("/api/push-tokens", pushTokenRoutes);
 app.use("/api/upload", uploadRoutes);
 app.use("/api/serviceability", serviceabilityRoutes);
 /* Compatibility alias */
