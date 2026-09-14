@@ -25,7 +25,7 @@ const router =
 
 router.post(
   "/register",
-  authenticate,
+  protect,
   registerPushToken
 );
 
@@ -35,7 +35,7 @@ router.post(
 
 router.post(
   "/unregister",
-  authenticate,
+  protect,
   unregisterPushToken
 );
 
@@ -45,7 +45,7 @@ router.post(
 
 router.get(
   "/me",
-  authenticate,
+  protect,
   getMyPushTokens
 );
 
