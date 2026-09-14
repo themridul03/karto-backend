@@ -13,7 +13,7 @@ import {
  * already used by your protected Karto routes.
  */
 import {
-  authenticate,
+  protect,
 } from "../middlewares/auth.middleware.js";
 
 const router =
