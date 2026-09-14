@@ -14,7 +14,7 @@ import {
  */
 import {
   protect,
-} from "../middlewares/auth.middleware.js";
+} from "../middleware/auth.middleware.js";
 
 const router =
   express.Router();
