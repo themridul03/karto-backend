@@ -4,35 +4,64 @@ import { uploadToCloudinary } from "../utils/cloudinaryUpload.js";
 /* ============================================================
    KARTOMART PRODUCT CONTROLLER
 
-   KartoMart is owned and managed directly by Karto.
-
-   Store
-      └── Category
-            └── Product
-                  └── Variants
-
-   No Vendor
-   No Commission
+   IMPORTANT:
+   - MartProduct = product master only.
+   - Price / MRP / costPrice / stock / quantity / unit / SKU /
+     barcode are stored in MartProductVariant.
+   - Existing product endpoints are preserved.
+   - Variant endpoints are included as well.
 ============================================================ */
 
 const DEFAULT_PAGE = 1;
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
 
-const ALLOWED_SORT_FIELDS = new Set([
+const PRODUCT_SORT_FIELDS = new Set([
   "name",
   "brand",
+  "sortOrder",
+  "isActive",
+  "isAvailable",
+  "isFeatured",
+  "isPopular",
+  "isBestSeller",
+  "rating",
+  "totalReviews",
+  "createdAt",
+  "updatedAt",
+]);
+
+const VARIANT_SORT_FIELDS = new Set([
+  "label",
+  "quantity",
+  "unit",
   "mrp",
   "price",
   "costPrice",
   "stock",
   "sortOrder",
+  "isDefault",
   "isActive",
   "isAvailable",
-  "isFeatured",
-  "isBestSeller",
   "createdAt",
   "updatedAt",
+]);
+
+const MART_UNITS = new Set([
+  "G",
+  "KG",
+  "ML",
+  "L",
+  "PCS",
+  "PACK",
+  "DOZEN",
+]);
+
+const STOCK_TYPES = new Set([
+  "ADD",
+  "REMOVE",
+  "SET",
+  "ADJUSTMENT",
 ]);
 
 /* ============================================================
@@ -40,51 +69,31 @@ const ALLOWED_SORT_FIELDS = new Set([
 ============================================================ */
 
 const cleanString = (value) => {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-
+  if (value === undefined || value === null) return undefined;
   return String(value).trim();
 };
 
+const nullableString = (value) => {
+  const cleaned = cleanString(value);
+  return cleaned ? cleaned : null;
+};
+
 const strictBoolean = (value) => {
-  if (
-    value === undefined ||
-    value === null ||
-    value === ""
-  ) {
+  if (value === undefined || value === null || value === "") {
     return undefined;
   }
 
-  if (typeof value === "boolean") {
-    return value;
-  }
+  if (typeof value === "boolean") return value;
+  if (value === 1 || value === "1") return true;
+  if (value === 0 || value === "0") return false;
 
-  if (value === 1 || value === "1") {
+  const normalized = String(value).trim().toLowerCase();
+
+  if (["true", "yes", "y", "active", "on"].includes(normalized)) {
     return true;
   }
 
-  if (value === 0 || value === "0") {
-    return false;
-  }
-
-  const normalized = String(value)
-    .trim()
-    .toLowerCase();
-
-  if (
-    ["true", "yes", "y", "active", "on"].includes(
-      normalized
-    )
-  ) {
-    return true;
-  }
-
-  if (
-    ["false", "no", "n", "inactive", "off"].includes(
-      normalized
-    )
-  ) {
+  if (["false", "no", "n", "inactive", "off"].includes(normalized)) {
     return false;
   }
 
@@ -93,90 +102,82 @@ const strictBoolean = (value) => {
 
 const boolValue = (value, fallback = false) => {
   const parsed = strictBoolean(value);
-
-  return parsed === undefined
-    ? fallback
-    : parsed;
+  return parsed === undefined ? fallback : parsed;
 };
 
 const parseNumber = (value) => {
-  if (
-    value === undefined ||
-    value === null ||
-    value === ""
-  ) {
+  if (value === undefined || value === null || value === "") {
     return undefined;
   }
 
   const number = Number(value);
-
-  return Number.isFinite(number)
-    ? number
-    : undefined;
+  return Number.isFinite(number) ? number : undefined;
 };
 
-const parseNonNegativeNumber = (value) => {
+const parseNonNegativeNumber = (value, fallback) => {
   const number = parseNumber(value);
 
-  if (
-    number === undefined ||
-    number < 0
-  ) {
-    return undefined;
-  }
+  if (number === undefined) return fallback;
+  if (number < 0) return undefined;
 
   return number;
 };
 
-const parseNonNegativeInteger = (
-  value,
-  fallback = undefined
-) => {
-  if (
-    value === undefined ||
-    value === null ||
-    value === ""
-  ) {
+const parsePositiveNumber = (value, fallback) => {
+  const number = parseNumber(value);
+
+  if (number === undefined) return fallback;
+  if (number <= 0) return undefined;
+
+  return number;
+};
+
+const parseInteger = (value, fallback) => {
+  if (value === undefined || value === null || value === "") {
     return fallback;
   }
 
   const number = Number(value);
+  return Number.isInteger(number) ? number : undefined;
+};
 
-  if (
-    !Number.isInteger(number) ||
-    number < 0
-  ) {
-    return undefined;
-  }
+const parseNonNegativeInteger = (value, fallback) => {
+  const number = parseInteger(value, fallback);
+
+  if (number === undefined) return undefined;
+  if (number < 0) return undefined;
 
   return number;
 };
 
-const parsePositiveInteger = (
-  value,
-  fallback
-) => {
-  const number = Number.parseInt(
-    value,
-    10
+const getPagination = (query) => {
+  const page = Math.max(
+    1,
+    parseInteger(query.page, DEFAULT_PAGE) || DEFAULT_PAGE
   );
 
-  if (
-    !Number.isInteger(number) ||
-    number <= 0
-  ) {
-    return fallback;
-  }
+  const limit = Math.min(
+    MAX_LIMIT,
+    Math.max(
+      1,
+      parseInteger(query.limit, DEFAULT_LIMIT) || DEFAULT_LIMIT
+    )
+  );
 
-  return number;
+  return {
+    page,
+    limit,
+    skip: (page - 1) * limit,
+  };
 };
 
-const sendError = (
-  res,
-  status,
-  message,
-  errors = undefined
-) => {
+const getSortOrder = (value) => {
+  return String(value || "desc").toLowerCase() === "asc"
+    ? "asc"
+    : "desc";
+};
+
+const sendError = (res, status, message, errors) => {
   return res.status(status).json({
     success: false,
     message,
@@ -184,23 +185,20 @@ const sendError = (
   });
 };
 
-const uploadImage = async (
-  req,
-  folder
-) => {
-  if (!req.file) {
-    return undefined;
-  }
-
-  return uploadToCloudinary(
-    req.file,
-    folder
-  );
+const uploadImage = async (req, folder) => {
+  if (!req.file) return undefined;
+  return uploadToCloudinary(req.file, folder);
 };
 
 /* ============================================================
-   COMMON INCLUDE
+   COMMON INCLUDES
 ============================================================ */
+
+const variantOrderBy = [
+  { isDefault: "desc" },
+  { sortOrder: "asc" },
+  { createdAt: "asc" },
+];
 
 const productInclude = {
   store: {
@@ -208,6 +206,44 @@ const productInclude = {
       id: true,
       name: true,
       cityId: true,
+      isActive: true,
+      isOpen: true,
+      isVerified: true,
+      isAcceptingOrders: true,
+    },
+  },
+
+  category: {
+    select: {
+      id: true,
+      storeId: true,
+      name: true,
+      imageUrl: true,
+      isActive: true,
+      deletedAt: true,
+    },
+  },
+
+  variants: {
+    where: {
+      deletedAt: null,
+    },
+    orderBy: variantOrderBy,
+  },
+};
+
+const publicProductInclude = {
+  store: {
+    select: {
+      id: true,
+      name: true,
+      cityId: true,
+      imageUrl: true,
+      bannerUrl: true,
+      minimumOrderAmount: true,
+      deliveryFee: true,
+      freeDeliveryAbove: true,
+      platformFee: true,
       isOpen: true,
       isVerified: true,
       isAcceptingOrders: true,
@@ -219,23 +255,19 @@ const productInclude = {
       id: true,
       name: true,
       imageUrl: true,
-      isActive: true,
     },
   },
 
   variants: {
     where: {
       deletedAt: null,
+      isActive: true,
+      isAvailable: true,
+      stock: {
+        gt: 0,
+      },
     },
-
-    orderBy: [
-      {
-        sortOrder: "asc",
-      },
-      {
-        createdAt: "asc",
-      },
-    ],
+    orderBy: variantOrderBy,
   },
 };
 
@@ -254,10 +286,16 @@ const handleMartProductError = (
   );
 
   if (error?.code === "P2002") {
+    const target = Array.isArray(error?.meta?.target)
+      ? error.meta.target.join(", ")
+      : error?.meta?.target;
+
     return sendError(
       res,
       409,
-      "A product with the same unique data already exists"
+      target
+        ? `Duplicate value for ${target}`
+        : "A product or variant with the same unique data already exists"
     );
   }
 
@@ -265,7 +303,7 @@ const handleMartProductError = (
     return sendError(
       res,
       400,
-      "Invalid KartoMart store, category or product relation"
+      "Invalid KartoMart store, category, product or variant relation"
     );
   }
 
@@ -273,7 +311,7 @@ const handleMartProductError = (
     return sendError(
       res,
       404,
-      "KartoMart product not found"
+      "KartoMart product or variant not found"
     );
   }
 
@@ -286,7 +324,7 @@ const handleMartProductError = (
 };
 
 /* ============================================================
-   PRODUCT VALIDATION
+   VALIDATION
 ============================================================ */
 
 const validateProductPayload = (
@@ -297,27 +335,15 @@ const validateProductPayload = (
 
   if (!isUpdate) {
     if (!cleanString(body.storeId)) {
-      errors.storeId =
-        "KartoMart store ID is required";
+      errors.storeId = "KartoMart store ID is required";
     }
 
     if (!cleanString(body.categoryId)) {
-      errors.categoryId =
-        "Category ID is required";
+      errors.categoryId = "Category ID is required";
     }
 
     if (!cleanString(body.name)) {
-      errors.name =
-        "Product name is required";
-    }
-
-    if (
-      body.price === undefined ||
-      body.price === null ||
-      body.price === ""
-    ) {
-      errors.price =
-        "Selling price is required";
+      errors.name = "Product name is required";
     }
   }
 
@@ -325,71 +351,37 @@ const validateProductPayload = (
     body.name !== undefined &&
     !cleanString(body.name)
   ) {
-    errors.name =
-      "Product name cannot be empty";
+    errors.name = "Product name cannot be empty";
   }
 
   if (
-    body.name &&
-    cleanString(body.name).length > 255
+    body.name !== undefined &&
+    cleanString(body.name)?.length > 255
   ) {
     errors.name =
       "Product name cannot exceed 255 characters";
   }
 
   if (
-    body.brand &&
-    cleanString(body.brand).length > 150
+    body.brand !== undefined &&
+    cleanString(body.brand)?.length > 150
   ) {
     errors.brand =
       "Brand cannot exceed 150 characters";
   }
 
   if (
-    body.description &&
-    cleanString(body.description).length > 5000
+    body.description !== undefined &&
+    cleanString(body.description)?.length > 5000
   ) {
     errors.description =
       "Description cannot exceed 5000 characters";
   }
 
-  const numericFields = [
-    "mrp",
-    "price",
-    "costPrice",
-  ];
-
-  for (const field of numericFields) {
-    if (
-      body[field] !== undefined &&
-      parseNonNegativeNumber(
-        body[field]
-      ) === undefined
-    ) {
-      errors[field] =
-        `${field} must be a valid non-negative number`;
-    }
-  }
-
-  if (body.stock !== undefined) {
-    const stock =
-      parseNonNegativeInteger(
-        body.stock
-      );
-
-    if (stock === undefined) {
-      errors.stock =
-        "stock must be a non-negative integer";
-    }
-  }
-
   if (body.sortOrder !== undefined) {
-    const sortOrder =
-      parseNonNegativeInteger(
-        body.sortOrder
-      );
-
-    if (sortOrder === undefined) {
+    if (
+      parseNonNegativeInteger(body.sortOrder) === undefined
+    ) {
       errors.sortOrder =
         "sortOrder must be a non-negative integer";
     }
@@ -399,15 +391,14 @@ const validateProductPayload = (
     "isActive",
     "isAvailable",
     "isFeatured",
+    "isPopular",
     "isBestSeller",
   ];
 
   for (const field of booleanFields) {
     if (
       body[field] !== undefined &&
-      strictBoolean(
-        body[field]
-      ) === undefined
+      strictBoolean(body[field]) === undefined
     ) {
       errors[field] =
         `${field} must be true or false`;
@@ -417,14 +408,139 @@ const validateProductPayload = (
   return errors;
 };
 
-/* ============================================================
-   PRICE VALIDATION
+const validateVariantPayload = (
+  body,
+  isUpdate = false
+) => {
+  const errors = {};
 
-   MRP >= Selling Price
-   Selling Price normally >= Cost Price
+  if (!isUpdate) {
+    if (!cleanString(body.label)) {
+      errors.label = "Variant label is required";
+    }
 
-   We prevent accidental negative-margin products.
-============================================================ */
+    if (
+      body.quantity === undefined ||
+      body.quantity === null ||
+      body.quantity === ""
+    ) {
+      errors.quantity = "Variant quantity is required";
+    }
+
+    if (!cleanString(body.unit)) {
+      errors.unit = "Variant unit is required";
+    }
+
+    if (
+      body.mrp === undefined ||
+      body.mrp === null ||
+      body.mrp === ""
+    ) {
+      errors.mrp = "MRP is required";
+    }
+
+    if (
+      body.price === undefined ||
+      body.price === null ||
+      body.price === ""
+    ) {
+      errors.price = "Selling price is required";
+    }
+  }
+
+  if (
+    body.label !== undefined &&
+    !cleanString(body.label)
+  ) {
+    errors.label = "Variant label cannot be empty";
+  }
+
+  if (
+    body.label !== undefined &&
+    cleanString(body.label)?.length > 100
+  ) {
+    errors.label =
+      "Variant label cannot exceed 100 characters";
+  }
+
+  if (body.quantity !== undefined) {
+    if (
+      parsePositiveNumber(body.quantity) === undefined
+    ) {
+      errors.quantity =
+        "quantity must be greater than 0";
+    }
+  }
+
+  if (body.unit !== undefined) {
+    const unit = cleanString(body.unit)?.toUpperCase();
+
+    if (!MART_UNITS.has(unit)) {
+      errors.unit =
+        "unit must be G, KG, ML, L, PCS, PACK or DOZEN";
+    }
+  }
+
+  for (const field of ["mrp", "price", "costPrice"]) {
+    if (
+      body[field] !== undefined &&
+      parseNonNegativeNumber(body[field]) === undefined
+    ) {
+      errors[field] =
+        `${field} must be a valid non-negative number`;
+    }
+  }
+
+  if (body.stock !== undefined) {
+    if (
+      parseNonNegativeInteger(body.stock) === undefined
+    ) {
+      errors.stock =
+        "stock must be a non-negative integer";
+    }
+  }
+
+  if (body.sortOrder !== undefined) {
+    if (
+      parseNonNegativeInteger(body.sortOrder) === undefined
+    ) {
+      errors.sortOrder =
+        "sortOrder must be a non-negative integer";
+    }
+  }
+
+  for (const field of [
+    "isDefault",
+    "isAvailable",
+    "isActive",
+  ]) {
+    if (
+      body[field] !== undefined &&
+      strictBoolean(body[field]) === undefined
+    ) {
+      errors[field] =
+        `${field} must be true or false`;
+    }
+  }
+
+  if (
+    body.sku !== undefined &&
+    cleanString(body.sku)?.length > 120
+  ) {
+    errors.sku =
+      "SKU cannot exceed 120 characters";
+  }
+
+  if (
+    body.barcode !== undefined &&
+    cleanString(body.barcode)?.length > 150
+  ) {
+    errors.barcode =
+      "Barcode cannot exceed 150 characters";
+  }
+
+  return errors;
+};
 
 const validatePrices = ({
   mrp,
@@ -461,56 +577,67 @@ const validatePrices = ({
 };
 
 /* ============================================================
-   STORE + CATEGORY VALIDATION
+   STORE / CATEGORY VALIDATION
 ============================================================ */
 
 const validateStoreAndCategory = async (
   storeId,
-  categoryId
+  categoryId,
+  tx = prisma
 ) => {
-  const store =
-    await prisma.martStore.findFirst({
-      where: {
-        id: storeId,
-        deletedAt: null,
-      },
-
-      select: {
-        id: true,
-        name: true,
-      },
-    });
+  const store = await tx.martStore.findFirst({
+    where: {
+      id: cleanString(storeId),
+      deletedAt: null,
+    },
+  });
 
   if (!store) {
     return {
       valid: false,
       status: 404,
-      message:
-        "KartoMart store not found",
+      message: "KartoMart store not found",
     };
   }
 
-  const category =
-    await prisma.martCategory.findFirst({
-      where: {
-        id: categoryId,
-        storeId,
-        deletedAt: null,
-      },
+  if (!store.isActive) {
+    return {
+      valid: false,
+      status: 409,
+      message: "KartoMart store is inactive",
+    };
+  }
 
-      select: {
-        id: true,
-        name: true,
-        isActive: true,
-      },
-    });
+  if (!categoryId) {
+    return {
+      valid: true,
+      store,
+      category: null,
+    };
+  }
+
+  const category = await tx.martCategory.findFirst({
+    where: {
+      id: cleanString(categoryId),
+      storeId: store.id,
+      deletedAt: null,
+    },
+  });
 
   if (!category) {
     return {
       valid: false,
-      status: 400,
+      status: 404,
       message:
-        "Category does not belong to the selected KartoMart store",
+        "KartoMart category not found in this store",
+    };
+  }
+
+  if (!category.isActive) {
+    return {
+      valid: false,
+      status: 409,
+      message: "KartoMart category is inactive",
     };
   }
 
@@ -518,6 +645,294 @@ const validateStoreAndCategory = async (
     valid: true,
     store,
     category,
+  };
+};
+
+/* ============================================================
+   VARIANT HELPERS
+============================================================ */
+
+const buildVariantCreateData = (
+  body,
+  productId,
+  defaults = {}
+) => {
+  const stock =
+    parseNonNegativeInteger(
+      body.stock,
+      defaults.stock ?? 0
+    ) ?? 0;
+
+  const isActive = boolValue(
+    body.isActive,
+    defaults.isActive ?? true
+  );
+
+  let isAvailable = boolValue(
+    body.isAvailable,
+    defaults.isAvailable ?? true
+  );
+
+  if (!isActive || stock <= 0) {
+    isAvailable = false;
+  }
+
+  return {
+    productId,
+    label:
+      cleanString(body.label) ||
+      defaults.label,
+
+    quantity:
+      parsePositiveNumber(
+        body.quantity,
+        defaults.quantity
+      ),
+
+    unit:
+      cleanString(
+        body.unit || defaults.unit
+      )?.toUpperCase(),
+
+    mrp:
+      parseNonNegativeNumber(
+        body.mrp,
+        defaults.mrp
+      ),
+
+    price:
+      parseNonNegativeNumber(
+        body.price,
+        defaults.price
+      ),
+
+    costPrice:
+      parseNonNegativeNumber(
+        body.costPrice,
+        defaults.costPrice ?? 0
+      ) ?? 0,
+
+    stock,
+
+    sku:
+      nullableString(
+        body.sku ?? defaults.sku
+      ),
+
+    barcode:
+      nullableString(
+        body.barcode ?? defaults.barcode
+      ),
+
+    isDefault: boolValue(
+      body.isDefault,
+      defaults.isDefault ?? false
+    ),
+
+    isAvailable,
+    isActive,
+
+    sortOrder:
+      parseNonNegativeInteger(
+        body.sortOrder,
+        defaults.sortOrder ?? 0
+      ) ?? 0,
+  };
+};
+
+const syncProductAvailability = async (
+  tx,
+  productId
+) => {
+  const product =
+    await tx.martProduct.findUnique({
+      where: {
+        id: productId,
+      },
+      select: {
+        id: true,
+        isActive: true,
+        deletedAt: true,
+      },
+    });
+
+  if (!product) return;
+
+  const availableVariantCount =
+    await tx.martProductVariant.count({
+      where: {
+        productId,
+        deletedAt: null,
+        isActive: true,
+        isAvailable: true,
+        stock: {
+          gt: 0,
+        },
+      },
+    });
+
+  const shouldBeAvailable =
+    product.deletedAt === null &&
+    product.isActive &&
+    availableVariantCount > 0;
+
+  await tx.martProduct.update({
+    where: {
+      id: productId,
+    },
+    data: {
+      isAvailable:
+        shouldBeAvailable,
+    },
+  });
+};
+
+const ensureDefaultVariant = async (
+  tx,
+  productId
+) => {
+  const currentDefault =
+    await tx.martProductVariant.findFirst({
+      where: {
+        productId,
+        deletedAt: null,
+        isDefault: true,
+      },
+    });
+
+  if (currentDefault) return;
+
+  const firstVariant =
+    await tx.martProductVariant.findFirst({
+      where: {
+        productId,
+        deletedAt: null,
+      },
+      orderBy: [
+        { sortOrder: "asc" },
+        { createdAt: "asc" },
+      ],
+    });
+
+  if (firstVariant) {
+    await tx.martProductVariant.update({
+      where: {
+        id: firstVariant.id,
+      },
+      data: {
+        isDefault: true,
+      },
+    });
+  }
+};
+
+const getDefaultVariant = async (
+  productId,
+  tx = prisma
+) => {
+  let variant =
+    await tx.martProductVariant.findFirst({
+      where: {
+        productId,
+        deletedAt: null,
+        isDefault: true,
+      },
+      orderBy: variantOrderBy,
+    });
+
+  if (!variant) {
+    variant =
+      await tx.martProductVariant.findFirst({
+        where: {
+          productId,
+          deletedAt: null,
+        },
+        orderBy: [
+          { sortOrder: "asc" },
+          { createdAt: "asc" },
+        ],
+      });
+  }
+
+  return variant;
+};
+
+const buildLegacyVariantFromProductBody = (
+  body
+) => {
+  const hasVariantData = [
+    "unit",
+    "weight",
+    "quantity",
+    "mrp",
+    "price",
+    "costPrice",
+    "stock",
+    "sku",
+    "barcode",
+    "variantLabel",
+  ].some(
+    (key) =>
+      body[key] !== undefined &&
+      body[key] !== null &&
+      body[key] !== ""
+  );
+
+  if (!hasVariantData) return null;
+
+  let quantity =
+    parsePositiveNumber(body.quantity);
+
+  let unit =
+    cleanString(body.unit)?.toUpperCase();
+
+  const weight =
+    cleanString(body.weight);
+
+  if (
+    (!quantity || !unit) &&
+    weight
+  ) {
+    const match =
+      weight.match(
+        /^(\d+(?:\.\d+)?)\s*(G|KG|ML|L|PCS|PACK|DOZEN)$/i
+      );
+
+    if (match) {
+      quantity =
+        quantity ||
+        Number(match[1]);
+
+      unit =
+        unit ||
+        match[2].toUpperCase();
+    }
+  }
+
+  if (!quantity) quantity = 1;
+  if (!unit) unit = "PCS";
+
+  const label =
+    cleanString(body.variantLabel) ||
+    weight ||
+    `${quantity} ${unit}`;
+
+  return {
+    label,
+    quantity,
+    unit,
+    mrp: body.mrp,
+    price: body.price,
+    costPrice: body.costPrice,
+    stock: body.stock,
+    sku: body.sku,
+    barcode: body.barcode,
+    isDefault: true,
+    isActive:
+      body.isActive,
+    isAvailable:
+      body.isAvailable,
+    sortOrder: 0,
   };
 };
 
@@ -548,28 +963,16 @@ export const createMartProduct = async (
     const {
       storeId,
       categoryId,
-
       name,
       description,
       brand,
-
       imageUrl,
-
-      unit,
-      weight,
-
-      mrp,
-      price,
-      costPrice = 0,
-
-      stock = 0,
-
-      sortOrder = 0,
-
-      isActive = true,
-      isAvailable = true,
-      isFeatured = false,
-      isBestSeller = false,
+      sortOrder,
+      isActive,
+      isAvailable,
+      isFeatured,
+      isPopular,
+      isBestSeller,
     } = req.body;
 
     const cleanStoreId =
@@ -577,8 +980,6 @@ export const createMartProduct = async (
 
     const cleanCategoryId =
       cleanString(categoryId);
-
-    /* ---------------- Relation validation ---------------- */
 
     const relation =
       await validateStoreAndCategory(
@@ -594,89 +995,16 @@ export const createMartProduct = async (
       );
     }
 
-    /* ---------------- Price validation ---------------- */
-
-    const finalPrice =
-      Number(price);
-
-    const finalMrp =
-      mrp !== undefined &&
-      mrp !== ""
-        ? Number(mrp)
-        : finalPrice;
-
-    const finalCostPrice =
-      Number(costPrice || 0);
-
-    const priceValidation =
-      validatePrices({
-        mrp: finalMrp,
-        price: finalPrice,
-        costPrice:
-          finalCostPrice,
-      });
-
-    if (!priceValidation.valid) {
-      return sendError(
-        res,
-        400,
-        priceValidation.message
-      );
-    }
-
-    /* ---------------- Duplicate ---------------- */
-
-    const duplicate =
-      await prisma.martProduct.findFirst({
-        where: {
-          storeId:
-            cleanStoreId,
-
-          categoryId:
-            cleanCategoryId,
-
-          name: {
-            equals:
-              cleanString(name),
-
-            mode:
-              "insensitive",
-          },
-
-          deletedAt:
-            null,
-        },
-
-        select: {
-          id: true,
-        },
-      });
-
-    if (duplicate) {
-      return sendError(
-        res,
-        409,
-        "This product already exists in the selected category"
-      );
-    }
-
-    /* ---------------- Image ---------------- */
-
     let finalImageUrl =
-      cleanString(imageUrl) || null;
+      nullableString(imageUrl);
 
     if (req.file) {
       try {
-        const uploadedUrl =
+        finalImageUrl =
           await uploadImage(
             req,
-            "karto-mart/products"
+            "karto/mart/products"
           );
-
-        if (uploadedUrl) {
-          finalImageUrl =
-            uploadedUrl;
-        }
       } catch (uploadError) {
         console.error(
           "MartProduct Cloudinary Upload Error:",
@@ -691,103 +1019,242 @@ export const createMartProduct = async (
       }
     }
 
-    const finalStock =
-      parseNonNegativeInteger(
-        stock,
-        0
+    const legacyVariant =
+      buildLegacyVariantFromProductBody(
+        req.body
       );
 
-    let finalAvailable =
-      boolValue(
-        isAvailable,
-        true
-      );
+    let requestedVariants = [];
 
-    /*
-       No stock = unavailable.
+    if (Array.isArray(req.body.variants)) {
+      requestedVariants =
+        req.body.variants;
+    } else if (
+      typeof req.body.variants === "string" &&
+      req.body.variants.trim()
+    ) {
+      try {
+        const parsed =
+          JSON.parse(req.body.variants);
 
-       If later you allow products without stock tracking,
-       this rule can be changed using trackInventory.
-    */
-    if (finalStock <= 0) {
-      finalAvailable = false;
+        if (Array.isArray(parsed)) {
+          requestedVariants = parsed;
+        }
+      } catch {
+        return sendError(
+          res,
+          400,
+          "variants must be a valid JSON array"
+        );
+      }
+    }
+
+    if (
+      !requestedVariants.length &&
+      legacyVariant
+    ) {
+      requestedVariants = [
+        legacyVariant,
+      ];
+    }
+
+    for (
+      let index = 0;
+      index < requestedVariants.length;
+      index++
+    ) {
+      const variantErrors =
+        validateVariantPayload(
+          requestedVariants[index],
+          false
+        );
+
+      if (
+        Object.keys(
+          variantErrors
+        ).length
+      ) {
+        return sendError(
+          res,
+          400,
+          `Variant ${index + 1} validation failed`,
+          variantErrors
+        );
+      }
+
+      const priceValidation =
+        validatePrices({
+          mrp:
+            parseNonNegativeNumber(
+              requestedVariants[index].mrp
+            ),
+          price:
+            parseNonNegativeNumber(
+              requestedVariants[index].price
+            ),
+          costPrice:
+            parseNonNegativeNumber(
+              requestedVariants[index].costPrice,
+              0
+            ),
+        });
+
+      if (!priceValidation.valid) {
+        return sendError(
+          res,
+          400,
+          `Variant ${index + 1}: ${priceValidation.message}`
+        );
+      }
     }
 
     const product =
-      await prisma.martProduct.create({
-        data: {
-          storeId:
-            cleanStoreId,
+      await prisma.$transaction(
+        async (tx) => {
+          const created =
+            await tx.martProduct.create({
+              data: {
+                storeId:
+                  cleanStoreId,
 
-          categoryId:
-            cleanCategoryId,
+                categoryId:
+                  cleanCategoryId,
 
-          name:
-            cleanString(name),
+                name:
+                  cleanString(name),
 
-          description:
-            cleanString(
-              description
-            ) || null,
+                description:
+                  nullableString(
+                    description
+                  ),
 
-          brand:
-            cleanString(brand) ||
-            null,
+                brand:
+                  nullableString(
+                    brand
+                  ),
 
-          imageUrl:
-            finalImageUrl,
+                imageUrl:
+                  finalImageUrl,
 
-          unit:
-            cleanString(unit) ||
-            null,
+                sortOrder:
+                  parseNonNegativeInteger(
+                    sortOrder,
+                    0
+                  ) ?? 0,
 
-          weight:
-            cleanString(weight) ||
-            null,
+                isActive:
+                  boolValue(
+                    isActive,
+                    true
+                  ),
 
-          mrp:
-            finalMrp,
+                isAvailable:
+                  false,
 
-          price:
-            finalPrice,
+                isFeatured:
+                  boolValue(
+                    isFeatured,
+                    false
+                  ),
 
-          costPrice:
-            finalCostPrice,
+                isPopular:
+                  boolValue(
+                    isPopular,
+                    false
+                  ),
 
-          stock:
-            finalStock,
+                isBestSeller:
+                  boolValue(
+                    isBestSeller,
+                    false
+                  ),
+              },
+            });
 
-          sortOrder:
-            parseNonNegativeInteger(
-              sortOrder,
-              0
-            ),
+          if (
+            requestedVariants.length
+          ) {
+            for (
+              let index = 0;
+              index <
+              requestedVariants.length;
+              index++
+            ) {
+              const variant =
+                requestedVariants[index];
 
-          isActive:
-            boolValue(
-              isActive,
-              true
-            ),
+              const data =
+                buildVariantCreateData(
+                  {
+                    ...variant,
+                    isDefault:
+                      variant.isDefault !==
+                      undefined
+                        ? variant.isDefault
+                        : index === 0,
+                  },
+                  created.id
+                );
 
-          isAvailable:
-            finalAvailable,
+              if (data.isDefault) {
+                await tx.martProductVariant.updateMany({
+                  where: {
+                    productId:
+                      created.id,
+                    deletedAt:
+                      null,
+                    isDefault:
+                      true,
+                  },
+                  data: {
+                    isDefault:
+                      false,
+                  },
+                });
+              }
 
-          isFeatured:
-            boolValue(
-              isFeatured,
-              false
-            ),
+              await tx.martProductVariant.create({
+                data,
+              });
+            }
 
-          isBestSeller:
-            boolValue(
-              isBestSeller,
-              false
-            ),
-        },
+            await ensureDefaultVariant(
+              tx,
+              created.id
+            );
+          }
 
-        include:
-          productInclude,
-      });
+          await syncProductAvailability(
+            tx,
+            created.id
+          );
+
+          if (
+            isAvailable !== undefined &&
+            strictBoolean(
+              isAvailable
+            ) === false
+          ) {
+            await tx.martProduct.update({
+              where: {
+                id: created.id,
+              },
+              data: {
+                isAvailable:
+                  false,
+              },
+            });
+          }
+
+          return tx.martProduct.findUnique({
+            where: {
+              id: created.id,
+            },
+            include:
+              productInclude,
+          });
+        }
+      );
 
     return res.status(201).json({
       success: true,
@@ -806,32 +1273,7 @@ export const createMartProduct = async (
 };
 
 /* ============================================================
-   GET PRODUCTS - ADMIN
-
-   Filters:
-   storeId
-   categoryId
-   search
-   brand
-   isActive
-   isAvailable
-   isFeatured
-   isBestSeller
-   inStock
-   minPrice
-   maxPrice
-   minStock
-   maxStock
-   includeDeleted
-   onlyDeleted
-
-   Pagination:
-   page
-   limit
-
-   Sorting:
-   sortBy
-   sortOrder
+   ADMIN PRODUCT LIST
 ============================================================ */
 
 export const getMartProducts = async (
@@ -844,90 +1286,95 @@ export const getMartProducts = async (
       categoryId,
       search,
       brand,
-
       isActive,
       isAvailable,
       isFeatured,
+      isPopular,
       isBestSeller,
-      inStock,
-
       minPrice,
       maxPrice,
-
       minStock,
       maxStock,
-
       includeDeleted,
-      onlyDeleted,
-
       sortBy = "createdAt",
       sortOrder = "desc",
     } = req.query;
 
-    const page =
-      parsePositiveInteger(
-        req.query.page,
-        DEFAULT_PAGE
-      );
-
-    const requestedLimit =
-      parsePositiveInteger(
-        req.query.limit,
-        DEFAULT_LIMIT
-      );
-
-    const limit =
-      Math.min(
-        requestedLimit,
-        MAX_LIMIT
-      );
-
-    const skip =
-      (page - 1) * limit;
+    const {
+      page,
+      limit,
+      skip,
+    } = getPagination(req.query);
 
     const where = {};
 
     if (
-      storeId &&
-      storeId !== "ALL"
+      strictBoolean(
+        includeDeleted
+      ) !== true
     ) {
+      where.deletedAt =
+        null;
+    }
+
+    if (cleanString(storeId)) {
       where.storeId =
         cleanString(storeId);
     }
 
-    if (
-      categoryId &&
-      categoryId !== "ALL"
-    ) {
+    if (cleanString(categoryId)) {
       where.categoryId =
         cleanString(categoryId);
     }
 
-    /* ---------------- Search ---------------- */
-
     if (cleanString(search)) {
-      const q =
+      const term =
         cleanString(search);
 
       where.OR = [
         {
           name: {
-            contains: q,
+            contains: term,
             mode: "insensitive",
           },
         },
-
-        {
-          description: {
-            contains: q,
-            mode: "insensitive",
-          },
-        },
-
         {
           brand: {
-            contains: q,
+            contains: term,
             mode: "insensitive",
+          },
+        },
+        {
+          description: {
+            contains: term,
+            mode: "insensitive",
+          },
+        },
+        {
+          variants: {
+            some: {
+              deletedAt: null,
+              OR: [
+                {
+                  label: {
+                    contains: term,
+                    mode: "insensitive",
+                  },
+                },
+                {
+                  sku: {
+                    contains: term,
+                    mode: "insensitive",
+                  },
+                },
+                {
+                  barcode: {
+                    contains: term,
+                    mode: "insensitive",
+                  },
+                },
+              ],
+            },
           },
         },
       ];
@@ -937,156 +1384,143 @@ export const getMartProducts = async (
       where.brand = {
         contains:
           cleanString(brand),
-
-        mode:
-          "insensitive",
+        mode: "insensitive",
       };
     }
 
-    /* ---------------- Boolean filters ---------------- */
-
-    const booleanFilters = {
+    const productBooleans = {
       isActive,
       isAvailable,
       isFeatured,
+      isPopular,
       isBestSeller,
     };
 
-    for (const [
-      field,
-      value,
-    ] of Object.entries(
-      booleanFilters
-    )) {
-      if (value !== undefined) {
-        const parsed =
-          strictBoolean(value);
-
-        if (parsed === undefined) {
-          return sendError(
-            res,
-            400,
-            `${field} must be true or false`
-          );
-        }
-
-        where[field] =
-          parsed;
-      }
-    }
-
-    /* ---------------- Stock ---------------- */
-
-    if (inStock !== undefined) {
-      const parsed =
-        strictBoolean(inStock);
-
-      if (parsed === undefined) {
-        return sendError(
-          res,
-          400,
-          "inStock must be true or false"
-        );
-      }
-
-      where.stock = parsed
-        ? {
-            gt: 0,
-          }
-        : {
-            lte: 0,
-          };
-    }
-
-    const minStockValue =
-      parseNumber(minStock);
-
-    const maxStockValue =
-      parseNumber(maxStock);
-
-    if (
-      minStockValue !== undefined ||
-      maxStockValue !== undefined
-    ) {
-      where.stock = {
-        ...(where.stock || {}),
-
-        ...(minStockValue !== undefined && {
-          gte:
-            minStockValue,
-        }),
-
-        ...(maxStockValue !== undefined && {
-          lte:
-            maxStockValue,
-        }),
-      };
-    }
-
-    /* ---------------- Price ---------------- */
-
-    const minPriceValue =
-      parseNumber(minPrice);
-
-    const maxPriceValue =
-      parseNumber(maxPrice);
-
-    if (
-      minPriceValue !== undefined ||
-      maxPriceValue !== undefined
-    ) {
-      where.price = {};
-
-      if (
-        minPriceValue !== undefined
-      ) {
-        where.price.gte =
-          minPriceValue;
-      }
-
-      if (
-        maxPriceValue !== undefined
-      ) {
-        where.price.lte =
-          maxPriceValue;
-      }
-    }
-
-    /* ---------------- Deleted ---------------- */
-
-    const includeDeletedValue =
-      strictBoolean(
-        includeDeleted
-      ) ?? false;
-
-    const onlyDeletedValue =
-      strictBoolean(
-        onlyDeleted
-      ) ?? false;
-
-    if (onlyDeletedValue) {
-      where.deletedAt = {
-        not: null,
-      };
-    } else if (!includeDeletedValue) {
-      where.deletedAt =
-        null;
-    }
-
-    /* ---------------- Sorting ---------------- */
-
-    const safeSortBy =
-      ALLOWED_SORT_FIELDS.has(
-        String(sortBy)
+    for (
+      const [key, value] of
+      Object.entries(
+        productBooleans
       )
-        ? String(sortBy)
-        : "createdAt";
+    ) {
+      const parsed =
+        strictBoolean(value);
 
-    const safeSortOrder =
-      String(sortOrder)
-        .toLowerCase() === "asc"
-        ? "asc"
-        : "desc";
+      if (parsed !== undefined) {
+        where[key] = parsed;
+      }
+    }
+
+    const variantFilters = {
+      deletedAt: null,
+    };
+
+    const parsedMinPrice =
+      parseNonNegativeNumber(
+        minPrice
+      );
+
+    const parsedMaxPrice =
+      parseNonNegativeNumber(
+        maxPrice
+      );
+
+    const parsedMinStock =
+      parseNonNegativeInteger(
+        minStock
+      );
+
+    const parsedMaxStock =
+      parseNonNegativeInteger(
+        maxStock
+      );
+
+    if (
+      parsedMinPrice !== undefined ||
+      parsedMaxPrice !== undefined
+    ) {
+      variantFilters.price = {};
+
+      if (
+        parsedMinPrice !== undefined
+      ) {
+        variantFilters.price.gte =
+          parsedMinPrice;
+      }
+
+      if (
+        parsedMaxPrice !== undefined
+      ) {
+        variantFilters.price.lte =
+          parsedMaxPrice;
+      }
+    }
+
+    if (
+      parsedMinStock !== undefined ||
+      parsedMaxStock !== undefined
+    ) {
+      variantFilters.stock = {};
+
+      if (
+        parsedMinStock !== undefined
+      ) {
+        variantFilters.stock.gte =
+          parsedMinStock;
+      }
+
+      if (
+        parsedMaxStock !== undefined
+      ) {
+        variantFilters.stock.lte =
+          parsedMaxStock;
+      }
+    }
+
+    if (
+      Object.keys(
+        variantFilters
+      ).length > 1
+    ) {
+      where.variants = {
+        some:
+          variantFilters,
+      };
+    }
+
+    let orderBy;
+
+    if (
+      ["price", "mrp", "costPrice", "stock"].includes(
+        sortBy
+      )
+    ) {
+      orderBy = [
+        {
+          sortOrder:
+            "asc",
+        },
+        {
+          createdAt:
+            getSortOrder(
+              sortOrder
+            ),
+        },
+      ];
+    } else {
+      const safeSortBy =
+        PRODUCT_SORT_FIELDS.has(
+          sortBy
+        )
+          ? sortBy
+          : "createdAt";
+
+      orderBy = {
+        [safeSortBy]:
+          getSortOrder(
+            sortOrder
+          ),
+      };
+    }
 
     const [
       products,
@@ -1095,22 +1529,11 @@ export const getMartProducts = async (
       await prisma.$transaction([
         prisma.martProduct.findMany({
           where,
-
           include:
             productInclude,
-
+          orderBy,
           skip,
           take: limit,
-
-          orderBy: [
-            {
-              [safeSortBy]:
-                safeSortOrder,
-            },
-            {
-              name: "asc",
-            },
-          ],
         }),
 
         prisma.martProduct.count({
@@ -1118,36 +1541,25 @@ export const getMartProducts = async (
         }),
       ]);
 
-    const totalPages =
-      Math.ceil(
-        total / limit
-      );
-
     return res.json({
       success: true,
-
+      message:
+        "KartoMart products fetched successfully",
       products,
       data: products,
-
       pagination: {
         page,
         limit,
         total,
-        totalPages,
-
+        totalPages:
+          Math.ceil(
+            total / limit
+          ),
         hasNextPage:
-          page < totalPages,
-
+          page * limit <
+          total,
         hasPreviousPage:
           page > 1,
-      },
-
-      sorting: {
-        sortBy:
-          safeSortBy,
-
-        sortOrder:
-          safeSortOrder,
       },
     });
   } catch (error) {
@@ -1168,19 +1580,24 @@ export const getMartProductById = async (
   res
 ) => {
   try {
-    const { id } =
-      req.params;
+    const id =
+      cleanString(
+        req.params.id
+      );
+
+    const includeDeleted =
+      strictBoolean(
+        req.query.includeDeleted
+      ) === true;
 
     const product =
       await prisma.martProduct.findFirst({
         where: {
-          id:
-            cleanString(id),
-
-          deletedAt:
-            null,
+          id,
+          ...(!includeDeleted && {
+            deletedAt: null,
+          }),
         },
-
         include:
           productInclude,
       });
@@ -1195,6 +1612,8 @@ export const getMartProductById = async (
 
     return res.json({
       success: true,
+      message:
+        "KartoMart product fetched successfully",
       product,
       data: product,
     });
@@ -1216,14 +1635,25 @@ export const updateMartProduct = async (
   res
 ) => {
   try {
-    const { id } =
-      req.params;
+    const id =
+      cleanString(
+        req.params.id
+      );
 
     const existing =
-      await prisma.martProduct.findUnique({
+      await prisma.martProduct.findFirst({
         where: {
-          id:
-            cleanString(id),
+          id,
+          deletedAt: null,
+        },
+        include: {
+          variants: {
+            where: {
+              deletedAt: null,
+            },
+            orderBy:
+              variantOrderBy,
+          },
         },
       });
 
@@ -1232,14 +1662,6 @@ export const updateMartProduct = async (
         res,
         404,
         "KartoMart product not found"
-      );
-    }
-
-    if (existing.deletedAt) {
-      return sendError(
-        res,
-        409,
-        "Deleted product cannot be updated. Restore it first."
       );
     }
 
@@ -1261,40 +1683,31 @@ export const updateMartProduct = async (
     const {
       storeId,
       categoryId,
-
       name,
       description,
       brand,
-
       imageUrl,
-
-      unit,
-      weight,
-
-      mrp,
-      price,
-      costPrice,
-
-      stock,
       sortOrder,
-
       isActive,
       isAvailable,
       isFeatured,
+      isPopular,
       isBestSeller,
     } = req.body;
 
     const finalStoreId =
       storeId !== undefined
-        ? cleanString(storeId)
+        ? cleanString(
+            storeId
+          )
         : existing.storeId;
 
     const finalCategoryId =
       categoryId !== undefined
-        ? cleanString(categoryId)
+        ? cleanString(
+            categoryId
+          )
         : existing.categoryId;
-
-    /* ---------------- Relation validation ---------------- */
 
     if (
       storeId !== undefined ||
@@ -1315,95 +1728,6 @@ export const updateMartProduct = async (
       }
     }
 
-    /* ---------------- Duplicate ---------------- */
-
-    if (
-      name !== undefined ||
-      storeId !== undefined ||
-      categoryId !== undefined
-    ) {
-      const finalName =
-        name !== undefined
-          ? cleanString(name)
-          : existing.name;
-
-      const duplicate =
-        await prisma.martProduct.findFirst({
-          where: {
-            storeId:
-              finalStoreId,
-
-            categoryId:
-              finalCategoryId,
-
-            name: {
-              equals:
-                finalName,
-
-              mode:
-                "insensitive",
-            },
-
-            deletedAt:
-              null,
-
-            NOT: {
-              id:
-                existing.id,
-            },
-          },
-
-          select: {
-            id: true,
-          },
-        });
-
-      if (duplicate) {
-        return sendError(
-          res,
-          409,
-          "This product already exists in the selected category"
-        );
-      }
-    }
-
-    /* ---------------- Price validation ---------------- */
-
-    const finalPrice =
-      price !== undefined
-        ? Number(price)
-        : Number(existing.price);
-
-    const finalMrp =
-      mrp !== undefined
-        ? Number(mrp)
-        : Number(existing.mrp);
-
-    const finalCostPrice =
-      costPrice !== undefined
-        ? Number(costPrice)
-        : Number(existing.costPrice);
-
-    const priceValidation =
-      validatePrices({
-        mrp:
-          finalMrp,
-        price:
-          finalPrice,
-        costPrice:
-          finalCostPrice,
-      });
-
-    if (!priceValidation.valid) {
-      return sendError(
-        res,
-        400,
-        priceValidation.message
-      );
-    }
-
-    /* ---------------- Image ---------------- */
-
     let finalImageUrl;
 
     if (req.file) {
@@ -1411,11 +1735,11 @@ export const updateMartProduct = async (
         finalImageUrl =
           await uploadImage(
             req,
-            "karto-mart/products"
+            "karto/mart/products"
           );
       } catch (uploadError) {
         console.error(
-          "MartProduct Cloudinary Update Error:",
+          "MartProduct Cloudinary Upload Error:",
           uploadError
         );
 
@@ -1425,9 +1749,13 @@ export const updateMartProduct = async (
           "Product image upload failed"
         );
       }
-    } else if (imageUrl !== undefined) {
+    } else if (
+      imageUrl !== undefined
+    ) {
       finalImageUrl =
-        cleanString(imageUrl) || null;
+        nullableString(
+          imageUrl
+        );
     }
 
     const updateData = {
@@ -1448,54 +1776,21 @@ export const updateMartProduct = async (
 
       ...(description !== undefined && {
         description:
-          cleanString(
+          nullableString(
             description
-          ) || null,
+          ),
       }),
 
       ...(brand !== undefined && {
         brand:
-          cleanString(brand) ||
-          null,
+          nullableString(
+            brand
+          ),
       }),
 
       ...(finalImageUrl !== undefined && {
         imageUrl:
           finalImageUrl,
-      }),
-
-      ...(unit !== undefined && {
-        unit:
-          cleanString(unit) ||
-          null,
-      }),
-
-      ...(weight !== undefined && {
-        weight:
-          cleanString(weight) ||
-          null,
-      }),
-
-      ...(mrp !== undefined && {
-        mrp:
-          Number(mrp),
-      }),
-
-      ...(price !== undefined && {
-        price:
-          Number(price),
-      }),
-
-      ...(costPrice !== undefined && {
-        costPrice:
-          Number(costPrice),
-      }),
-
-      ...(stock !== undefined && {
-        stock:
-          parseNonNegativeInteger(
-            stock
-          ),
       }),
 
       ...(sortOrder !== undefined && {
@@ -1512,17 +1807,17 @@ export const updateMartProduct = async (
           ),
       }),
 
-      ...(isAvailable !== undefined && {
-        isAvailable:
-          strictBoolean(
-            isAvailable
-          ),
-      }),
-
       ...(isFeatured !== undefined && {
         isFeatured:
           strictBoolean(
             isFeatured
+          ),
+      }),
+
+      ...(isPopular !== undefined && {
+        isPopular:
+          strictBoolean(
+            isPopular
           ),
       }),
 
@@ -1534,41 +1829,300 @@ export const updateMartProduct = async (
       }),
     };
 
-    if (!Object.keys(updateData).length) {
-      return sendError(
-        res,
-        400,
-        "No valid fields provided for update"
+    const legacyVariant =
+      buildLegacyVariantFromProductBody(
+        req.body
       );
-    }
-
-    /*
-       Stock consistency
-    */
-
-    const resultingStock =
-      updateData.stock !== undefined
-        ? updateData.stock
-        : existing.stock;
-
-    if (resultingStock <= 0) {
-      updateData.isAvailable =
-        false;
-    }
 
     const product =
-      await prisma.martProduct.update({
-        where: {
-          id:
-            existing.id,
-        },
+      await prisma.$transaction(
+        async (tx) => {
+          if (
+            Object.keys(
+              updateData
+            ).length
+          ) {
+            await tx.martProduct.update({
+              where: {
+                id:
+                  existing.id,
+              },
+              data:
+                updateData,
+            });
+          }
 
-        data:
-          updateData,
+          if (legacyVariant) {
+            let variant =
+              await getDefaultVariant(
+                existing.id,
+                tx
+              );
 
-        include:
-          productInclude,
-      });
+            if (!variant) {
+              const variantErrors =
+                validateVariantPayload(
+                  legacyVariant,
+                  false
+                );
+
+              if (
+                Object.keys(
+                  variantErrors
+                ).length
+              ) {
+                const error =
+                  new Error(
+                    Object.values(
+                      variantErrors
+                    )[0]
+                  );
+
+                error.statusCode =
+                  400;
+
+                throw error;
+              }
+
+              const variantData =
+                buildVariantCreateData(
+                  legacyVariant,
+                  existing.id
+                );
+
+              const priceValidation =
+                validatePrices(
+                  variantData
+                );
+
+              if (
+                !priceValidation.valid
+              ) {
+                const error =
+                  new Error(
+                    priceValidation.message
+                  );
+
+                error.statusCode =
+                  400;
+
+                throw error;
+              }
+
+              await tx.martProductVariant.create({
+                data:
+                  variantData,
+              });
+            } else {
+              const variantData = {};
+
+              if (
+                req.body.variantLabel !== undefined ||
+                req.body.weight !== undefined
+              ) {
+                variantData.label =
+                  cleanString(
+                    req.body.variantLabel
+                  ) ||
+                  cleanString(
+                    req.body.weight
+                  ) ||
+                  variant.label;
+              }
+
+              if (
+                req.body.quantity !== undefined
+              ) {
+                variantData.quantity =
+                  parsePositiveNumber(
+                    req.body.quantity
+                  );
+              }
+
+              if (
+                req.body.unit !== undefined
+              ) {
+                variantData.unit =
+                  cleanString(
+                    req.body.unit
+                  )?.toUpperCase();
+              }
+
+              if (
+                req.body.mrp !== undefined
+              ) {
+                variantData.mrp =
+                  parseNonNegativeNumber(
+                    req.body.mrp
+                  );
+              }
+
+              if (
+                req.body.price !== undefined
+              ) {
+                variantData.price =
+                  parseNonNegativeNumber(
+                    req.body.price
+                  );
+              }
+
+              if (
+                req.body.costPrice !== undefined
+              ) {
+                variantData.costPrice =
+                  parseNonNegativeNumber(
+                    req.body.costPrice
+                  );
+              }
+
+              if (
+                req.body.stock !== undefined
+              ) {
+                variantData.stock =
+                  parseNonNegativeInteger(
+                    req.body.stock
+                  );
+              }
+
+              if (
+                req.body.sku !== undefined
+              ) {
+                variantData.sku =
+                  nullableString(
+                    req.body.sku
+                  );
+              }
+
+              if (
+                req.body.barcode !== undefined
+              ) {
+                variantData.barcode =
+                  nullableString(
+                    req.body.barcode
+                  );
+              }
+
+              if (
+                req.body.isAvailable !== undefined
+              ) {
+                variantData.isAvailable =
+                  strictBoolean(
+                    req.body.isAvailable
+                  );
+              }
+
+              if (
+                req.body.isActive !== undefined
+              ) {
+                variantData.isActive =
+                  strictBoolean(
+                    req.body.isActive
+                  );
+              }
+
+              const resulting = {
+                mrp:
+                  variantData.mrp ??
+                  Number(
+                    variant.mrp
+                  ),
+                price:
+                  variantData.price ??
+                  Number(
+                    variant.price
+                  ),
+                costPrice:
+                  variantData.costPrice ??
+                  Number(
+                    variant.costPrice
+                  ),
+              };
+
+              const priceValidation =
+                validatePrices(
+                  resulting
+                );
+
+              if (
+                !priceValidation.valid
+              ) {
+                const error =
+                  new Error(
+                    priceValidation.message
+                  );
+
+                error.statusCode =
+                  400;
+
+                throw error;
+              }
+
+              const resultingStock =
+                variantData.stock ??
+                variant.stock;
+
+              const resultingActive =
+                variantData.isActive ??
+                variant.isActive;
+
+              if (
+                resultingStock <= 0 ||
+                !resultingActive
+              ) {
+                variantData.isAvailable =
+                  false;
+              }
+
+              if (
+                Object.keys(
+                  variantData
+                ).length
+              ) {
+                await tx.martProductVariant.update({
+                  where: {
+                    id:
+                      variant.id,
+                  },
+                  data:
+                    variantData,
+                });
+              }
+            }
+          }
+
+          await syncProductAvailability(
+            tx,
+            existing.id
+          );
+
+          if (
+            isAvailable !== undefined &&
+            strictBoolean(
+              isAvailable
+            ) === false
+          ) {
+            await tx.martProduct.update({
+              where: {
+                id:
+                  existing.id,
+              },
+              data: {
+                isAvailable:
+                  false,
+              },
+            });
+          }
+
+          return tx.martProduct.findUnique({
+            where: {
+              id:
+                existing.id,
+            },
+            include:
+              productInclude,
+          });
+        }
+      );
 
     return res.json({
       success: true,
@@ -1578,6 +2132,14 @@ export const updateMartProduct = async (
       data: product,
     });
   } catch (error) {
+    if (error?.statusCode) {
+      return sendError(
+        res,
+        error.statusCode,
+        error.message
+      );
+    }
+
     return handleMartProductError(
       res,
       error,
@@ -1588,15 +2150,6 @@ export const updateMartProduct = async (
 
 /* ============================================================
    PUBLIC PRODUCTS
-
-   Customer app.
-
-   Only returns:
-   - Active product
-   - Available product
-   - Stock > 0
-   - Active category
-   - Available store
 ============================================================ */
 
 export const getPublicMartProducts = async (
@@ -1610,6 +2163,7 @@ export const getPublicMartProducts = async (
       search,
       brand,
       featured,
+      popular,
       bestSeller,
       minPrice,
       maxPrice,
@@ -1621,72 +2175,19 @@ export const getPublicMartProducts = async (
       return sendError(
         res,
         400,
-        "storeId is required"
+        "KartoMart store ID is required"
       );
     }
 
-    const page =
-      parsePositiveInteger(
-        req.query.page,
-        DEFAULT_PAGE
-      );
-
-    const requestedLimit =
-      parsePositiveInteger(
-        req.query.limit,
-        DEFAULT_LIMIT
-      );
-
-    const limit =
-      Math.min(
-        requestedLimit,
-        MAX_LIMIT
-      );
-
-    const skip =
-      (page - 1) * limit;
-
-    /* ---------------- Store ---------------- */
-
-    const store =
-      await prisma.martStore.findFirst({
-        where: {
-          id:
-            cleanString(storeId),
-
-          deletedAt:
-            null,
-
-          isOpen:
-            true,
-
-          isVerified:
-            true,
-
-          isAcceptingOrders:
-            true,
-        },
-
-        select: {
-          id: true,
-          name: true,
-          deliveryFee: true,
-          minimumOrder: true,
-          deliveryTime: true,
-        },
-      });
-
-    if (!store) {
-      return sendError(
-        res,
-        404,
-        "KartoMart store is currently unavailable"
-      );
-    }
+    const {
+      page,
+      limit,
+      skip,
+    } = getPagination(req.query);
 
     const where = {
       storeId:
-        store.id,
+        cleanString(storeId),
 
       deletedAt:
         null,
@@ -1697,142 +2198,231 @@ export const getPublicMartProducts = async (
       isAvailable:
         true,
 
-      stock: {
-        gt: 0,
-      },
-
-      category: {
+      store: {
         deletedAt:
           null,
 
         isActive:
           true,
+
+        isOpen:
+          true,
+
+        isVerified:
+          true,
+
+        isAcceptingOrders:
+          true,
+      },
+
+      variants: {
+        some: {
+          deletedAt:
+            null,
+
+          isActive:
+            true,
+
+          isAvailable:
+            true,
+
+          stock: {
+            gt: 0,
+          },
+        },
       },
     };
 
-    if (
-      categoryId &&
-      categoryId !== "ALL"
-    ) {
+    if (cleanString(categoryId)) {
       where.categoryId =
         cleanString(categoryId);
-    }
 
-    if (cleanString(search)) {
-      const q =
-        cleanString(search);
-
+      where.category = {
+        deletedAt:
+          null,
+        isActive:
+          true,
+      };
+    } else {
       where.OR = [
         {
-          name: {
-            contains: q,
-            mode: "insensitive",
-          },
+          categoryId:
+            null,
         },
-
         {
-          description: {
-            contains: q,
-            mode: "insensitive",
-          },
-        },
-
-        {
-          brand: {
-            contains: q,
-            mode: "insensitive",
+          category: {
+            deletedAt:
+              null,
+            isActive:
+              true,
           },
         },
       ];
+    }
+
+    if (cleanString(search)) {
+      const term =
+        cleanString(search);
+
+      const searchFilter = [
+        {
+          name: {
+            contains:
+              term,
+            mode:
+              "insensitive",
+          },
+        },
+        {
+          brand: {
+            contains:
+              term,
+            mode:
+              "insensitive",
+          },
+        },
+        {
+          description: {
+            contains:
+              term,
+            mode:
+              "insensitive",
+          },
+        },
+        {
+          variants: {
+            some: {
+              deletedAt:
+                null,
+              isActive:
+                true,
+              OR: [
+                {
+                  label: {
+                    contains:
+                      term,
+                    mode:
+                      "insensitive",
+                  },
+                },
+                {
+                  sku: {
+                    contains:
+                      term,
+                    mode:
+                      "insensitive",
+                  },
+                },
+              ],
+            },
+          },
+        },
+      ];
+
+      if (where.OR) {
+        where.AND = [
+          {
+            OR:
+              where.OR,
+          },
+          {
+            OR:
+              searchFilter,
+          },
+        ];
+
+        delete where.OR;
+      } else {
+        where.OR =
+          searchFilter;
+      }
     }
 
     if (cleanString(brand)) {
       where.brand = {
         contains:
           cleanString(brand),
-
         mode:
           "insensitive",
       };
     }
 
-    if (featured !== undefined) {
-      const parsed =
-        strictBoolean(
-          featured
-        );
-
-      if (parsed === undefined) {
-        return sendError(
-          res,
-          400,
-          "featured must be true or false"
-        );
-      }
-
+    if (
+      strictBoolean(featured) !==
+      undefined
+    ) {
       where.isFeatured =
-        parsed;
+        strictBoolean(featured);
     }
-
-    if (bestSeller !== undefined) {
-      const parsed =
-        strictBoolean(
-          bestSeller
-        );
-
-      if (parsed === undefined) {
-        return sendError(
-          res,
-          400,
-          "bestSeller must be true or false"
-        );
-      }
-
-      where.isBestSeller =
-        parsed;
-    }
-
-    const min =
-      parseNumber(minPrice);
-
-    const max =
-      parseNumber(maxPrice);
 
     if (
-      min !== undefined ||
-      max !== undefined
+      strictBoolean(popular) !==
+      undefined
     ) {
-      where.price = {
-        ...(min !== undefined && {
-          gte: min,
-        }),
+      where.isPopular =
+        strictBoolean(popular);
+    }
 
-        ...(max !== undefined && {
-          lte: max,
-        }),
+    if (
+      strictBoolean(bestSeller) !==
+      undefined
+    ) {
+      where.isBestSeller =
+        strictBoolean(bestSeller);
+    }
+
+    const parsedMinPrice =
+      parseNonNegativeNumber(
+        minPrice
+      );
+
+    const parsedMaxPrice =
+      parseNonNegativeNumber(
+        maxPrice
+      );
+
+    if (
+      parsedMinPrice !== undefined ||
+      parsedMaxPrice !== undefined
+    ) {
+      const price = {};
+
+      if (
+        parsedMinPrice !== undefined
+      ) {
+        price.gte =
+          parsedMinPrice;
+      }
+
+      if (
+        parsedMaxPrice !== undefined
+      ) {
+        price.lte =
+          parsedMaxPrice;
+      }
+
+      where.variants = {
+        some: {
+          deletedAt:
+            null,
+          isActive:
+            true,
+          isAvailable:
+            true,
+          stock: {
+            gt: 0,
+          },
+          price,
+        },
       };
     }
 
-    const PUBLIC_SORT_FIELDS =
-      new Set([
-        "name",
-        "price",
-        "sortOrder",
-        "createdAt",
-      ]);
-
     const safeSortBy =
-      PUBLIC_SORT_FIELDS.has(
-        String(sortBy)
+      PRODUCT_SORT_FIELDS.has(
+        sortBy
       )
-        ? String(sortBy)
+        ? sortBy
         : "sortOrder";
-
-    const safeSortOrder =
-      String(sortOrder)
-        .toLowerCase() === "desc"
-        ? "desc"
-        : "asc";
 
     const [
       products,
@@ -1841,55 +2431,23 @@ export const getPublicMartProducts = async (
       await prisma.$transaction([
         prisma.martProduct.findMany({
           where,
-
-          include: {
-            category: {
-              select: {
-                id: true,
-                name: true,
-              },
-            },
-
-            variants: {
-              where: {
-                deletedAt: null,
-                isActive: true,
-                isAvailable: true,
-                stock: {
-                  gt: 0,
-                },
-              },
-
-              orderBy: {
-                sortOrder: "asc",
-              },
-            },
-          },
-
-          skip,
-          take: limit,
-
+          include:
+            publicProductInclude,
           orderBy: [
             {
-              isFeatured:
-                "desc",
-            },
-
-            {
-              isBestSeller:
-                "desc",
-            },
-
-            {
               [safeSortBy]:
-                safeSortOrder,
+                getSortOrder(
+                  sortOrder
+                ),
             },
-
             {
-              name:
-                "asc",
+              createdAt:
+                "desc",
             },
           ],
+          skip,
+          take:
+            limit,
         }),
 
         prisma.martProduct.count({
@@ -1897,28 +2455,24 @@ export const getPublicMartProducts = async (
         }),
       ]);
 
-    const totalPages =
-      Math.ceil(
-        total / limit
-      );
-
     return res.json({
       success: true,
-
-      store,
-
+      message:
+        "KartoMart products fetched successfully",
       products,
-      data: products,
-
+      data:
+        products,
       pagination: {
         page,
         limit,
         total,
-        totalPages,
-
+        totalPages:
+          Math.ceil(
+            total / limit
+          ),
         hasNextPage:
-          page < totalPages,
-
+          page * limit <
+          total,
         hasPreviousPage:
           page > 1,
       },
@@ -1927,27 +2481,31 @@ export const getPublicMartProducts = async (
     return handleMartProductError(
       res,
       error,
-      "fetch public products"
+      "fetch public"
     );
   }
 };
 
 /* ============================================================
-   UPDATE PRODUCT ACTIVE STATUS
+   UPDATE PRODUCT STATUS
 ============================================================ */
 
 export const updateMartProductStatus =
   async (req, res) => {
     try {
-      const { id } =
-        req.params;
+      const id =
+        cleanString(
+          req.params.id
+        );
 
       const isActive =
         strictBoolean(
           req.body.isActive
         );
 
-      if (isActive === undefined) {
+      if (
+        isActive === undefined
+      ) {
         return sendError(
           res,
           400,
@@ -1958,9 +2516,7 @@ export const updateMartProductStatus =
       const existing =
         await prisma.martProduct.findFirst({
           where: {
-            id:
-              cleanString(id),
-
+            id,
             deletedAt:
               null,
           },
@@ -1975,33 +2531,57 @@ export const updateMartProductStatus =
       }
 
       const product =
-        await prisma.martProduct.update({
-          where: {
-            id:
-              existing.id,
-          },
+        await prisma.$transaction(
+          async (tx) => {
+            await tx.martProduct.update({
+              where: {
+                id,
+              },
+              data: {
+                isActive,
+                ...(!isActive && {
+                  isAvailable:
+                    false,
+                }),
+              },
+            });
 
-          data: {
-            isActive,
+            if (!isActive) {
+              await tx.martProductVariant.updateMany({
+                where: {
+                  productId:
+                    id,
+                  deletedAt:
+                    null,
+                },
+                data: {
+                  isAvailable:
+                    false,
+                },
+              });
+            }
 
-            ...(!isActive && {
-              isAvailable:
-                false,
-            }),
-          },
+            await syncProductAvailability(
+              tx,
+              id
+            );
 
-          include:
-            productInclude,
-        });
+            return tx.martProduct.findUnique({
+              where: {
+                id,
+              },
+              include:
+                productInclude,
+            });
+          }
+        );
 
       return res.json({
         success: true,
-
         message:
           isActive
             ? "KartoMart product activated successfully"
             : "KartoMart product deactivated successfully",
-
         product,
         data: product,
       });
@@ -2015,14 +2595,16 @@ export const updateMartProductStatus =
   };
 
 /* ============================================================
-   UPDATE AVAILABILITY
+   UPDATE PRODUCT AVAILABILITY
 ============================================================ */
 
 export const updateMartProductAvailability =
   async (req, res) => {
     try {
-      const { id } =
-        req.params;
+      const id =
+        cleanString(
+          req.params.id
+        );
 
       const isAvailable =
         strictBoolean(
@@ -2042,9 +2624,7 @@ export const updateMartProductAvailability =
       const existing =
         await prisma.martProduct.findFirst({
           where: {
-            id:
-              cleanString(id),
-
+            id,
             deletedAt:
               null,
           },
@@ -2069,40 +2649,51 @@ export const updateMartProductAvailability =
         );
       }
 
-      if (
-        isAvailable &&
-        existing.stock <= 0
-      ) {
-        return sendError(
-          res,
-          409,
-          "Product cannot be available because it is out of stock"
-        );
+      if (isAvailable) {
+        const availableVariant =
+          await prisma.martProductVariant.findFirst({
+            where: {
+              productId:
+                id,
+              deletedAt:
+                null,
+              isActive:
+                true,
+              isAvailable:
+                true,
+              stock: {
+                gt: 0,
+              },
+            },
+          });
+
+        if (!availableVariant) {
+          return sendError(
+            res,
+            409,
+            "Product cannot be available because no active in-stock variant is available"
+          );
+        }
       }
 
       const product =
         await prisma.martProduct.update({
           where: {
-            id:
-              existing.id,
+            id,
           },
-
           data: {
             isAvailable,
           },
-
           include:
             productInclude,
         });
 
       return res.json({
         success: true,
-
         message:
           isAvailable
             ? "Product is now available"
             : "Product marked unavailable",
-
         product,
         data: product,
       });
@@ -2122,8 +2713,10 @@ export const updateMartProductAvailability =
 export const updateMartProductFeatured =
   async (req, res) => {
     try {
-      const { id } =
-        req.params;
+      const id =
+        cleanString(
+          req.params.id
+        );
 
       const isFeatured =
         strictBoolean(
@@ -2143,9 +2736,7 @@ export const updateMartProductFeatured =
       const existing =
         await prisma.martProduct.findFirst({
           where: {
-            id:
-              cleanString(id),
-
+            id,
             deletedAt:
               null,
           },
@@ -2162,26 +2753,21 @@ export const updateMartProductFeatured =
       const product =
         await prisma.martProduct.update({
           where: {
-            id:
-              existing.id,
+            id,
           },
-
           data: {
             isFeatured,
           },
-
           include:
             productInclude,
         });
 
       return res.json({
         success: true,
-
         message:
           isFeatured
             ? "Product marked as featured"
             : "Product removed from featured",
-
         product,
         data: product,
       });
@@ -2195,14 +2781,90 @@ export const updateMartProductFeatured =
   };
 
 /* ============================================================
+   POPULAR PRODUCT
+============================================================ */
+
+export const updateMartProductPopular =
+  async (req, res) => {
+    try {
+      const id =
+        cleanString(
+          req.params.id
+        );
+
+      const isPopular =
+        strictBoolean(
+          req.body.isPopular
+        );
+
+      if (
+        isPopular === undefined
+      ) {
+        return sendError(
+          res,
+          400,
+          "isPopular must be true or false"
+        );
+      }
+
+      const existing =
+        await prisma.martProduct.findFirst({
+          where: {
+            id,
+            deletedAt:
+              null,
+          },
+        });
+
+      if (!existing) {
+        return sendError(
+          res,
+          404,
+          "KartoMart product not found"
+        );
+      }
+
+      const product =
+        await prisma.martProduct.update({
+          where: {
+            id,
+          },
+          data: {
+            isPopular,
+          },
+          include:
+            productInclude,
+        });
+
+      return res.json({
+        success: true,
+        message:
+          isPopular
+            ? "Product marked as popular"
+            : "Product removed from popular",
+        product,
+        data: product,
+      });
+    } catch (error) {
+      return handleMartProductError(
+        res,
+        error,
+        "update popular status"
+      );
+    }
+  };
+
+/* ============================================================
    BEST SELLER
 ============================================================ */
 
 export const updateMartProductBestSeller =
   async (req, res) => {
     try {
-      const { id } =
-        req.params;
+      const id =
+        cleanString(
+          req.params.id
+        );
 
       const isBestSeller =
         strictBoolean(
@@ -2222,9 +2884,7 @@ export const updateMartProductBestSeller =
       const existing =
         await prisma.martProduct.findFirst({
           where: {
-            id:
-              cleanString(id),
-
+            id,
             deletedAt:
               null,
           },
@@ -2241,26 +2901,21 @@ export const updateMartProductBestSeller =
       const product =
         await prisma.martProduct.update({
           where: {
-            id:
-              existing.id,
+            id,
           },
-
           data: {
             isBestSeller,
           },
-
           include:
             productInclude,
         });
 
       return res.json({
         success: true,
-
         message:
           isBestSeller
             ? "Product marked as best seller"
             : "Product removed from best sellers",
-
         product,
         data: product,
       });
@@ -2268,70 +2923,971 @@ export const updateMartProductBestSeller =
       return handleMartProductError(
         res,
         error,
-        "update best seller"
+        "update best seller status"
       );
     }
   };
 
 /* ============================================================
-   ADJUST INVENTORY
+   CREATE VARIANT
+============================================================ */
 
-   Body examples:
+export const createMartProductVariant =
+  async (req, res) => {
+    try {
+      const productId =
+        cleanString(
+          req.params.id ||
+          req.body.productId
+        );
 
-   Add stock:
-   {
-      "type": "ADD",
-      "quantity": 20
-   }
+      if (!productId) {
+        return sendError(
+          res,
+          400,
+          "Product ID is required"
+        );
+      }
 
-   Remove stock:
-   {
-      "type": "REMOVE",
-      "quantity": 5
-   }
+      const product =
+        await prisma.martProduct.findFirst({
+          where: {
+            id:
+              productId,
+            deletedAt:
+              null,
+          },
+        });
 
-   Set exact stock:
-   {
-      "type": "SET",
-      "quantity": 100
-   }
+      if (!product) {
+        return sendError(
+          res,
+          404,
+          "KartoMart product not found"
+        );
+      }
+
+      const errors =
+        validateVariantPayload(
+          req.body,
+          false
+        );
+
+      if (
+        Object.keys(
+          errors
+        ).length
+      ) {
+        return sendError(
+          res,
+          400,
+          "Validation failed",
+          errors
+        );
+      }
+
+      const data =
+        buildVariantCreateData(
+          req.body,
+          productId
+        );
+
+      const priceValidation =
+        validatePrices(data);
+
+      if (
+        !priceValidation.valid
+      ) {
+        return sendError(
+          res,
+          400,
+          priceValidation.message
+        );
+      }
+
+      const variant =
+        await prisma.$transaction(
+          async (tx) => {
+            const existingCount =
+              await tx.martProductVariant.count({
+                where: {
+                  productId,
+                  deletedAt:
+                    null,
+                },
+              });
+
+            if (
+              data.isDefault ||
+              existingCount === 0
+            ) {
+              await tx.martProductVariant.updateMany({
+                where: {
+                  productId,
+                  deletedAt:
+                    null,
+                  isDefault:
+                    true,
+                },
+                data: {
+                  isDefault:
+                    false,
+                },
+              });
+
+              data.isDefault =
+                true;
+            }
+
+            const created =
+              await tx.martProductVariant.create({
+                data,
+              });
+
+            await ensureDefaultVariant(
+              tx,
+              productId
+            );
+
+            await syncProductAvailability(
+              tx,
+              productId
+            );
+
+            return created;
+          }
+        );
+
+      return res.status(201).json({
+        success: true,
+        message:
+          "KartoMart product variant created successfully",
+        variant,
+        data: variant,
+      });
+    } catch (error) {
+      return handleMartProductError(
+        res,
+        error,
+        "create variant"
+      );
+    }
+  };
+
+/* ============================================================
+   GET VARIANTS
+============================================================ */
+
+export const getMartProductVariants =
+  async (req, res) => {
+    try {
+      const productId =
+        cleanString(
+          req.params.id ||
+          req.params.productId ||
+          req.query.productId
+        );
+
+      if (!productId) {
+        return sendError(
+          res,
+          400,
+          "Product ID is required"
+        );
+      }
+
+      const includeDeleted =
+        strictBoolean(
+          req.query.includeDeleted
+        ) === true;
+
+      const {
+        page,
+        limit,
+        skip,
+      } = getPagination(
+        req.query
+      );
+
+      const where = {
+        productId,
+        ...(!includeDeleted && {
+          deletedAt:
+            null,
+        }),
+      };
+
+      if (
+        req.query.isActive !==
+        undefined
+      ) {
+        const parsed =
+          strictBoolean(
+            req.query.isActive
+          );
+
+        if (
+          parsed !== undefined
+        ) {
+          where.isActive =
+            parsed;
+        }
+      }
+
+      if (
+        req.query.isAvailable !==
+        undefined
+      ) {
+        const parsed =
+          strictBoolean(
+            req.query.isAvailable
+          );
+
+        if (
+          parsed !== undefined
+        ) {
+          where.isAvailable =
+            parsed;
+        }
+      }
+
+      if (
+        req.query.unit
+      ) {
+        const unit =
+          cleanString(
+            req.query.unit
+          )?.toUpperCase();
+
+        if (
+          MART_UNITS.has(
+            unit
+          )
+        ) {
+          where.unit =
+            unit;
+        }
+      }
+
+      const sortBy =
+        VARIANT_SORT_FIELDS.has(
+          req.query.sortBy
+        )
+          ? req.query.sortBy
+          : "sortOrder";
+
+      const [
+        variants,
+        total,
+      ] =
+        await prisma.$transaction([
+          prisma.martProductVariant.findMany({
+            where,
+            orderBy: [
+              {
+                [sortBy]:
+                  getSortOrder(
+                    req.query.sortOrder ||
+                    "asc"
+                  ),
+              },
+              {
+                createdAt:
+                  "asc",
+              },
+            ],
+            skip,
+            take:
+              limit,
+          }),
+
+          prisma.martProductVariant.count({
+            where,
+          }),
+        ]);
+
+      return res.json({
+        success: true,
+        message:
+          "KartoMart product variants fetched successfully",
+        variants,
+        data:
+          variants,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages:
+            Math.ceil(
+              total / limit
+            ),
+          hasNextPage:
+            page * limit <
+            total,
+          hasPreviousPage:
+            page > 1,
+        },
+      });
+    } catch (error) {
+      return handleMartProductError(
+        res,
+        error,
+        "fetch variants"
+      );
+    }
+  };
+
+/* ============================================================
+   UPDATE VARIANT
+============================================================ */
+
+export const updateMartProductVariant =
+  async (req, res) => {
+    try {
+      const variantId =
+        cleanString(
+          req.params.variantId ||
+          req.params.id
+        );
+
+      const existing =
+        await prisma.martProductVariant.findFirst({
+          where: {
+            id:
+              variantId,
+            deletedAt:
+              null,
+          },
+        });
+
+      if (!existing) {
+        return sendError(
+          res,
+          404,
+          "KartoMart product variant not found"
+        );
+      }
+
+      const errors =
+        validateVariantPayload(
+          req.body,
+          true
+        );
+
+      if (
+        Object.keys(
+          errors
+        ).length
+      ) {
+        return sendError(
+          res,
+          400,
+          "Validation failed",
+          errors
+        );
+      }
+
+      const updateData = {};
+
+      if (
+        req.body.label !== undefined
+      ) {
+        updateData.label =
+          cleanString(
+            req.body.label
+          );
+      }
+
+      if (
+        req.body.quantity !== undefined
+      ) {
+        updateData.quantity =
+          parsePositiveNumber(
+            req.body.quantity
+          );
+      }
+
+      if (
+        req.body.unit !== undefined
+      ) {
+        updateData.unit =
+          cleanString(
+            req.body.unit
+          )?.toUpperCase();
+      }
+
+      if (
+        req.body.mrp !== undefined
+      ) {
+        updateData.mrp =
+          parseNonNegativeNumber(
+            req.body.mrp
+          );
+      }
+
+      if (
+        req.body.price !== undefined
+      ) {
+        updateData.price =
+          parseNonNegativeNumber(
+            req.body.price
+          );
+      }
+
+      if (
+        req.body.costPrice !== undefined
+      ) {
+        updateData.costPrice =
+          parseNonNegativeNumber(
+            req.body.costPrice
+          );
+      }
+
+      if (
+        req.body.stock !== undefined
+      ) {
+        updateData.stock =
+          parseNonNegativeInteger(
+            req.body.stock
+          );
+      }
+
+      if (
+        req.body.sku !== undefined
+      ) {
+        updateData.sku =
+          nullableString(
+            req.body.sku
+          );
+      }
+
+      if (
+        req.body.barcode !== undefined
+      ) {
+        updateData.barcode =
+          nullableString(
+            req.body.barcode
+          );
+      }
+
+      if (
+        req.body.isDefault !== undefined
+      ) {
+        updateData.isDefault =
+          strictBoolean(
+            req.body.isDefault
+          );
+      }
+
+      if (
+        req.body.isActive !== undefined
+      ) {
+        updateData.isActive =
+          strictBoolean(
+            req.body.isActive
+          );
+      }
+
+      if (
+        req.body.isAvailable !== undefined
+      ) {
+        updateData.isAvailable =
+          strictBoolean(
+            req.body.isAvailable
+          );
+      }
+
+      if (
+        req.body.sortOrder !== undefined
+      ) {
+        updateData.sortOrder =
+          parseNonNegativeInteger(
+            req.body.sortOrder
+          );
+      }
+
+      if (
+        !Object.keys(
+          updateData
+        ).length
+      ) {
+        return sendError(
+          res,
+          400,
+          "No valid variant fields provided for update"
+        );
+      }
+
+      const priceValidation =
+        validatePrices({
+          mrp:
+            updateData.mrp ??
+            Number(
+              existing.mrp
+            ),
+
+          price:
+            updateData.price ??
+            Number(
+              existing.price
+            ),
+
+          costPrice:
+            updateData.costPrice ??
+            Number(
+              existing.costPrice
+            ),
+        });
+
+      if (
+        !priceValidation.valid
+      ) {
+        return sendError(
+          res,
+          400,
+          priceValidation.message
+        );
+      }
+
+      const resultingStock =
+        updateData.stock ??
+        existing.stock;
+
+      const resultingActive =
+        updateData.isActive ??
+        existing.isActive;
+
+      if (
+        resultingStock <= 0 ||
+        !resultingActive
+      ) {
+        updateData.isAvailable =
+          false;
+      }
+
+      const variant =
+        await prisma.$transaction(
+          async (tx) => {
+            if (
+              updateData.isDefault ===
+              true
+            ) {
+              await tx.martProductVariant.updateMany({
+                where: {
+                  productId:
+                    existing.productId,
+                  id: {
+                    not:
+                      existing.id,
+                  },
+                  deletedAt:
+                    null,
+                },
+                data: {
+                  isDefault:
+                    false,
+                },
+              });
+            }
+
+            const updated =
+              await tx.martProductVariant.update({
+                where: {
+                  id:
+                    existing.id,
+                },
+                data:
+                  updateData,
+              });
+
+            if (
+              updateData.isDefault ===
+              false &&
+              existing.isDefault
+            ) {
+              await ensureDefaultVariant(
+                tx,
+                existing.productId
+              );
+            }
+
+            await syncProductAvailability(
+              tx,
+              existing.productId
+            );
+
+            return updated;
+          }
+        );
+
+      return res.json({
+        success: true,
+        message:
+          "KartoMart product variant updated successfully",
+        variant,
+        data: variant,
+      });
+    } catch (error) {
+      return handleMartProductError(
+        res,
+        error,
+        "update variant"
+      );
+    }
+  };
+
+/* ============================================================
+   DELETE VARIANT
+============================================================ */
+
+export const deleteMartProductVariant =
+  async (req, res) => {
+    try {
+      const variantId =
+        cleanString(
+          req.params.variantId ||
+          req.params.id
+        );
+
+      const existing =
+        await prisma.martProductVariant.findUnique({
+          where: {
+            id:
+              variantId,
+          },
+        });
+
+      if (
+        !existing ||
+        existing.deletedAt
+      ) {
+        return sendError(
+          res,
+          404,
+          "KartoMart product variant not found"
+        );
+      }
+
+      const variant =
+        await prisma.$transaction(
+          async (tx) => {
+            const updated =
+              await tx.martProductVariant.update({
+                where: {
+                  id:
+                    existing.id,
+                },
+                data: {
+                  deletedAt:
+                    new Date(),
+                  isActive:
+                    false,
+                  isAvailable:
+                    false,
+                  isDefault:
+                    false,
+                },
+              });
+
+            await ensureDefaultVariant(
+              tx,
+              existing.productId
+            );
+
+            await syncProductAvailability(
+              tx,
+              existing.productId
+            );
+
+            return updated;
+          }
+        );
+
+      return res.json({
+        success: true,
+        message:
+          "KartoMart product variant deleted successfully",
+        variant,
+        data: variant,
+      });
+    } catch (error) {
+      return handleMartProductError(
+        res,
+        error,
+        "delete variant"
+      );
+    }
+  };
+
+/* ============================================================
+   RESTORE VARIANT
+============================================================ */
+
+export const restoreMartProductVariant =
+  async (req, res) => {
+    try {
+      const variantId =
+        cleanString(
+          req.params.variantId ||
+          req.params.id
+        );
+
+      const existing =
+        await prisma.martProductVariant.findUnique({
+          where: {
+            id:
+              variantId,
+          },
+        });
+
+      if (!existing) {
+        return sendError(
+          res,
+          404,
+          "KartoMart product variant not found"
+        );
+      }
+
+      if (!existing.deletedAt) {
+        return sendError(
+          res,
+          409,
+          "KartoMart product variant is not deleted"
+        );
+      }
+
+      const product =
+        await prisma.martProduct.findFirst({
+          where: {
+            id:
+              existing.productId,
+            deletedAt:
+              null,
+          },
+        });
+
+      if (!product) {
+        return sendError(
+          res,
+          409,
+          "Restore the parent product first"
+        );
+      }
+
+      const variant =
+        await prisma.$transaction(
+          async (tx) => {
+            const activeCount =
+              await tx.martProductVariant.count({
+                where: {
+                  productId:
+                    existing.productId,
+                  deletedAt:
+                    null,
+                },
+              });
+
+            const updated =
+              await tx.martProductVariant.update({
+                where: {
+                  id:
+                    existing.id,
+                },
+                data: {
+                  deletedAt:
+                    null,
+                  isActive:
+                    false,
+                  isAvailable:
+                    false,
+                  isDefault:
+                    activeCount ===
+                    0,
+                },
+              });
+
+            await ensureDefaultVariant(
+              tx,
+              existing.productId
+            );
+
+            await syncProductAvailability(
+              tx,
+              existing.productId
+            );
+
+            return updated;
+          }
+        );
+
+      return res.json({
+        success: true,
+        message:
+          "KartoMart product variant restored successfully",
+        variant,
+        data: variant,
+      });
+    } catch (error) {
+      return handleMartProductError(
+        res,
+        error,
+        "restore variant"
+      );
+    }
+  };
+
+/* ============================================================
+   HARD DELETE VARIANT
+============================================================ */
+
+export const hardDeleteMartProductVariant =
+  async (req, res) => {
+    try {
+      const variantId =
+        cleanString(
+          req.params.variantId ||
+          req.params.id
+        );
+
+      const existing =
+        await prisma.martProductVariant.findUnique({
+          where: {
+            id:
+              variantId,
+          },
+          include: {
+            _count: {
+              select: {
+                cartItems:
+                  true,
+                orderItems:
+                  true,
+                stockMovements:
+                  true,
+              },
+            },
+          },
+        });
+
+      if (!existing) {
+        return sendError(
+          res,
+          404,
+          "KartoMart product variant not found"
+        );
+      }
+
+      if (
+        existing._count.orderItems >
+        0
+      ) {
+        return sendError(
+          res,
+          409,
+          "Variant cannot be permanently deleted because it has order history"
+        );
+      }
+
+      await prisma.$transaction(
+        async (tx) => {
+          await tx.martCartItem.deleteMany({
+            where: {
+              variantId:
+                existing.id,
+            },
+          });
+
+          await tx.martStockMovement.deleteMany({
+            where: {
+              variantId:
+                existing.id,
+            },
+          });
+
+          await tx.martProductVariant.delete({
+            where: {
+              id:
+                existing.id,
+            },
+          });
+
+          await ensureDefaultVariant(
+            tx,
+            existing.productId
+          );
+
+          await syncProductAvailability(
+            tx,
+            existing.productId
+          );
+        }
+      );
+
+      return res.json({
+        success: true,
+        message:
+          "KartoMart product variant permanently deleted successfully",
+      });
+    } catch (error) {
+      return handleMartProductError(
+        res,
+        error,
+        "hard delete variant"
+      );
+    }
+  };
+
+/* ============================================================
+   STOCK ADJUSTMENT
+
+   req.params.id = productId
+   req.body.variantId optional.
+   If omitted, default variant is used.
 ============================================================ */
 
 export const adjustMartProductStock =
   async (req, res) => {
     try {
-      const { id } =
-        req.params;
+      const productId =
+        cleanString(
+          req.params.id
+        );
+
+      const variantId =
+        cleanString(
+          req.body.variantId
+        );
 
       const type =
         cleanString(
-          req.body.type
+          req.body.type ||
+          "SET"
         )?.toUpperCase();
 
       const quantity =
-        Number(
+        parseNonNegativeInteger(
           req.body.quantity
         );
 
+      const reason =
+        nullableString(
+          req.body.reason
+        );
+
       if (
-        ![
-          "ADD",
-          "REMOVE",
-          "SET",
-        ].includes(type)
+        !STOCK_TYPES.has(
+          type
+        )
       ) {
         return sendError(
           res,
           400,
-          "type must be ADD, REMOVE or SET"
+          "type must be ADD, REMOVE, SET or ADJUSTMENT"
         );
       }
 
       if (
-        !Number.isInteger(
-          quantity
-        ) ||
-        quantity < 0
+        quantity === undefined
       ) {
         return sendError(
           res,
@@ -2341,99 +3897,16 @@ export const adjustMartProductStock =
       }
 
       const product =
-        await prisma.$transaction(
-          async (tx) => {
-            const existing =
-              await tx.martProduct.findFirst({
-                where: {
-                  id:
-                    cleanString(id),
+        await prisma.martProduct.findFirst({
+          where: {
+            id:
+              productId,
+            deletedAt:
+              null,
+          },
+        });
 
-                  deletedAt:
-                    null,
-                },
-              });
-
-            if (!existing) {
-              const error =
-                new Error(
-                  "PRODUCT_NOT_FOUND"
-                );
-
-              throw error;
-            }
-
-            let newStock;
-
-            switch (type) {
-              case "ADD":
-                newStock =
-                  existing.stock +
-                  quantity;
-                break;
-
-              case "REMOVE":
-                if (
-                  quantity >
-                  existing.stock
-                ) {
-                  const error =
-                    new Error(
-                      "INSUFFICIENT_STOCK"
-                    );
-
-                  throw error;
-                }
-
-                newStock =
-                  existing.stock -
-                  quantity;
-                break;
-
-              case "SET":
-                newStock =
-                  quantity;
-                break;
-
-              default:
-                newStock =
-                  existing.stock;
-            }
-
-            return tx.martProduct.update({
-              where: {
-                id:
-                  existing.id,
-              },
-
-              data: {
-                stock:
-                  newStock,
-
-                ...(newStock <= 0 && {
-                  isAvailable:
-                    false,
-                }),
-              },
-
-              include:
-                productInclude,
-            });
-          }
-        );
-
-      return res.json({
-        success: true,
-        message:
-          "Product stock updated successfully",
-        product,
-        data: product,
-      });
-    } catch (error) {
-      if (
-        error?.message ===
-        "PRODUCT_NOT_FOUND"
-      ) {
+      if (!product) {
         return sendError(
           res,
           404,
@@ -2441,17 +3914,133 @@ export const adjustMartProductStock =
         );
       }
 
-      if (
-        error?.message ===
-        "INSUFFICIENT_STOCK"
-      ) {
+      let variant;
+
+      if (variantId) {
+        variant =
+          await prisma.martProductVariant.findFirst({
+            where: {
+              id:
+                variantId,
+              productId,
+              deletedAt:
+                null,
+            },
+          });
+      } else {
+        variant =
+          await getDefaultVariant(
+            productId
+          );
+      }
+
+      if (!variant) {
         return sendError(
           res,
-          409,
-          "Insufficient product stock"
+          404,
+          variantId
+            ? "Product variant not found"
+            : "Default product variant not found"
         );
       }
 
+      const previousStock =
+        variant.stock;
+
+      let newStock;
+
+      if (type === "ADD") {
+        newStock =
+          previousStock +
+          quantity;
+      } else if (
+        type === "REMOVE"
+      ) {
+        newStock =
+          previousStock -
+          quantity;
+      } else {
+        newStock =
+          quantity;
+      }
+
+      if (newStock < 0) {
+        return sendError(
+          res,
+          409,
+          `Insufficient stock. Current stock is ${previousStock}`
+        );
+      }
+
+      const result =
+        await prisma.$transaction(
+          async (tx) => {
+            const updatedVariant =
+              await tx.martProductVariant.update({
+                where: {
+                  id:
+                    variant.id,
+                },
+                data: {
+                  stock:
+                    newStock,
+
+                  isAvailable:
+                    newStock >
+                      0 &&
+                    variant.isActive,
+                },
+              });
+
+            await tx.martStockMovement.create({
+              data: {
+                productId,
+                variantId:
+                  variant.id,
+                type,
+                quantity,
+                previousStock,
+                newStock,
+                reason,
+              },
+            });
+
+            await syncProductAvailability(
+              tx,
+              productId
+            );
+
+            const updatedProduct =
+              await tx.martProduct.findUnique({
+                where: {
+                  id:
+                    productId,
+                },
+                include:
+                  productInclude,
+              });
+
+            return {
+              updatedVariant,
+              updatedProduct,
+            };
+          }
+        );
+
+      return res.json({
+        success: true,
+        message:
+          "Product stock updated successfully",
+        previousStock,
+        newStock,
+        variant:
+          result.updatedVariant,
+        product:
+          result.updatedProduct,
+        data:
+          result.updatedProduct,
+      });
+    } catch (error) {
       return handleMartProductError(
         res,
         error,
@@ -2469,14 +4058,15 @@ export const deleteMartProduct = async (
   res
 ) => {
   try {
-    const { id } =
-      req.params;
+    const id =
+      cleanString(
+        req.params.id
+      );
 
     const existing =
       await prisma.martProduct.findUnique({
         where: {
-          id:
-            cleanString(id),
+          id,
         },
       });
 
@@ -2497,32 +4087,46 @@ export const deleteMartProduct = async (
     }
 
     const product =
-      await prisma.martProduct.update({
-        where: {
-          id:
-            existing.id,
-        },
+      await prisma.$transaction(
+        async (tx) => {
+          await tx.martProductVariant.updateMany({
+            where: {
+              productId:
+                id,
+              deletedAt:
+                null,
+            },
+            data: {
+              isActive:
+                false,
+              isAvailable:
+                false,
+            },
+          });
 
-        data: {
-          deletedAt:
-            new Date(),
-
-          isActive:
-            false,
-
-          isAvailable:
-            false,
-
-          isFeatured:
-            false,
-
-          isBestSeller:
-            false,
-        },
-
-        include:
-          productInclude,
-      });
+          return tx.martProduct.update({
+            where: {
+              id,
+            },
+            data: {
+              deletedAt:
+                new Date(),
+              isActive:
+                false,
+              isAvailable:
+                false,
+              isFeatured:
+                false,
+              isPopular:
+                false,
+              isBestSeller:
+                false,
+            },
+            include:
+              productInclude,
+          });
+        }
+      );
 
     return res.json({
       success: true,
@@ -2549,14 +4153,15 @@ export const restoreMartProduct = async (
   res
 ) => {
   try {
-    const { id } =
-      req.params;
+    const id =
+      cleanString(
+        req.params.id
+      );
 
     const existing =
       await prisma.martProduct.findUnique({
         where: {
-          id:
-            cleanString(id),
+          id,
         },
       });
 
@@ -2590,39 +4195,36 @@ export const restoreMartProduct = async (
       );
     }
 
-    /*
-       Restore safely.
-
-       Admin must activate it explicitly.
-    */
-
     const product =
-      await prisma.martProduct.update({
-        where: {
-          id:
-            existing.id,
-        },
+      await prisma.$transaction(
+        async (tx) => {
+          await tx.martProduct.update({
+            where: {
+              id,
+            },
+            data: {
+              deletedAt:
+                null,
 
-        data: {
-          deletedAt:
-            null,
+              // Safe restore:
+              // admin activates it explicitly.
+              isActive:
+                false,
 
-          isActive:
-            false,
+              isAvailable:
+                false,
+            },
+          });
 
-          isAvailable:
-            false,
-
-          isFeatured:
-            false,
-
-          isBestSeller:
-            false,
-        },
-
-        include:
-          productInclude,
-      });
+          return tx.martProduct.findUnique({
+            where: {
+              id,
+            },
+            include:
+              productInclude,
+          });
+        }
+      );
 
     return res.json({
       success: true,
@@ -2642,13 +4244,6 @@ export const restoreMartProduct = async (
 
 /* ============================================================
    HARD DELETE PRODUCT
-
-   Prevent if referenced by:
-   - Cart
-   - Orders
-   - Other transactional data
-
-   P2003 provides final DB protection.
 ============================================================ */
 
 export const hardDeleteMartProduct = async (
@@ -2656,22 +4251,27 @@ export const hardDeleteMartProduct = async (
   res
 ) => {
   try {
-    const { id } =
-      req.params;
+    const id =
+      cleanString(
+        req.params.id
+      );
 
     const existing =
       await prisma.martProduct.findUnique({
         where: {
-          id:
-            cleanString(id),
+          id,
         },
-
         include: {
           _count: {
             select: {
-              variants: true,
-              cartItems: true,
-              orderItems: true,
+              variants:
+                true,
+              cartItems:
+                true,
+              orderItems:
+                true,
+              stockMovements:
+                true,
             },
           },
         },
@@ -2686,38 +4286,42 @@ export const hardDeleteMartProduct = async (
     }
 
     if (
-      existing._count.cartItems > 0 ||
-      existing._count.orderItems > 0
+      existing._count.orderItems >
+      0
     ) {
       return sendError(
         res,
         409,
-        "Product has cart/order history and cannot be permanently deleted. Use soft delete instead."
+        "Product cannot be permanently deleted because it has order history"
       );
     }
 
     await prisma.$transaction(
       async (tx) => {
-        /*
-           Variants can be removed because there is
-           no transactional product history.
-        */
+        await tx.martCartItem.deleteMany({
+          where: {
+            productId:
+              id,
+          },
+        });
 
-        if (
-          existing._count.variants > 0
-        ) {
-          await tx.martProductVariant.deleteMany({
-            where: {
-              productId:
-                existing.id,
-            },
-          });
-        }
+        await tx.martStockMovement.deleteMany({
+          where: {
+            productId:
+              id,
+          },
+        });
+
+        await tx.martProductVariant.deleteMany({
+          where: {
+            productId:
+              id,
+          },
+        });
 
         await tx.martProduct.delete({
           where: {
-            id:
-              existing.id,
+            id,
           },
         });
       }
@@ -2738,16 +4342,7 @@ export const hardDeleteMartProduct = async (
 };
 
 /* ============================================================
-   BULK STATUS UPDATE
-
-   Body:
-
-   {
-      "ids": ["id1", "id2"],
-      "isActive": true,
-      "isAvailable": true,
-      "isFeatured": false
-   }
+   BULK UPDATE PRODUCT STATUS
 ============================================================ */
 
 export const bulkUpdateMartProductStatus =
@@ -2756,14 +4351,11 @@ export const bulkUpdateMartProductStatus =
       const {
         ids,
         isActive,
-        isAvailable,
-        isFeatured,
-        isBestSeller,
       } = req.body;
 
       if (
         !Array.isArray(ids) ||
-        ids.length === 0
+        !ids.length
       ) {
         return sendError(
           res,
@@ -2772,19 +4364,19 @@ export const bulkUpdateMartProductStatus =
         );
       }
 
-      const uniqueIds = [
+      const cleanIds = [
         ...new Set(
           ids
-            .map((id) =>
-              cleanString(id)
+            .map(
+              cleanString
             )
-            .filter(Boolean)
+            .filter(
+              Boolean
+            )
         ),
       ];
 
-      if (
-        uniqueIds.length === 0
-      ) {
+      if (!cleanIds.length) {
         return sendError(
           res,
           400,
@@ -2792,104 +4384,86 @@ export const bulkUpdateMartProductStatus =
         );
       }
 
+      const finalStatus =
+        strictBoolean(
+          isActive
+        );
+
       if (
-        uniqueIds.length > 100
+        finalStatus === undefined
       ) {
         return sendError(
           res,
           400,
-          "Maximum 100 products can be updated at once"
+          "isActive must be true or false"
         );
       }
-
-      const updateData = {};
-
-      const fields = {
-        isActive,
-        isAvailable,
-        isFeatured,
-        isBestSeller,
-      };
-
-      for (const [
-        field,
-        value,
-      ] of Object.entries(
-        fields
-      )) {
-        if (value !== undefined) {
-          const parsed =
-            strictBoolean(value);
-
-          if (parsed === undefined) {
-            return sendError(
-              res,
-              400,
-              `${field} must be true or false`
-            );
-          }
-
-          updateData[field] =
-            parsed;
-        }
-      }
-
-      if (!Object.keys(updateData).length) {
-        return sendError(
-          res,
-          400,
-          "Provide at least one status field"
-        );
-      }
-
-      if (
-        updateData.isActive === false
-      ) {
-        updateData.isAvailable =
-          false;
-      }
-
-      /*
-         Don't bulk enable unavailable zero-stock items.
-      */
-
-      const where = {
-        id: {
-          in:
-            uniqueIds,
-        },
-
-        deletedAt:
-          null,
-
-        ...(updateData.isAvailable === true && {
-          stock: {
-            gt: 0,
-          },
-
-          isActive:
-            true,
-        }),
-      };
 
       const result =
-        await prisma.martProduct.updateMany({
-          where,
-          data:
-            updateData,
-        });
+        await prisma.$transaction(
+          async (tx) => {
+            const updateResult =
+              await tx.martProduct.updateMany({
+                where: {
+                  id: {
+                    in:
+                      cleanIds,
+                  },
+                  deletedAt:
+                    null,
+                },
+                data: {
+                  isActive:
+                    finalStatus,
+
+                  ...(!finalStatus && {
+                    isAvailable:
+                      false,
+                  }),
+                },
+              });
+
+            if (!finalStatus) {
+              await tx.martProductVariant.updateMany({
+                where: {
+                  productId: {
+                    in:
+                      cleanIds,
+                  },
+                  deletedAt:
+                    null,
+                },
+                data: {
+                  isAvailable:
+                    false,
+                },
+              });
+            }
+
+            for (
+              const productId of
+              cleanIds
+            ) {
+              await syncProductAvailability(
+                tx,
+                productId
+              );
+            }
+
+            return updateResult;
+          }
+        );
 
       return res.json({
         success: true,
-
         message:
-          "KartoMart products updated successfully",
-
+          finalStatus
+            ? "KartoMart products activated successfully"
+            : "KartoMart products deactivated successfully",
+        updatedCount:
+          result.count,
         data: {
-          requested:
-            uniqueIds.length,
-
-          updated:
+          updatedCount:
             result.count,
         },
       });
@@ -2897,7 +4471,7 @@ export const bulkUpdateMartProductStatus =
       return handleMartProductError(
         res,
         error,
-        "bulk status update"
+        "bulk update status"
       );
     }
   };
@@ -2906,168 +4480,214 @@ export const bulkUpdateMartProductStatus =
    PRODUCT STATS
 ============================================================ */
 
-export const getMartProductStats = async (
-  req,
-  res
-) => {
-  try {
-    const {
-      storeId,
-      categoryId,
-    } = req.query;
+export const getMartProductStats =
+  async (req, res) => {
+    try {
+      const storeId =
+        cleanString(
+          req.query.storeId
+        );
 
-    const baseWhere = {
-      deletedAt:
-        null,
-
-      ...(storeId &&
-        storeId !== "ALL" && {
-          storeId:
-            cleanString(storeId),
+      const productWhere = {
+        deletedAt:
+          null,
+        ...(storeId && {
+          storeId,
         }),
+      };
 
-      ...(categoryId &&
-        categoryId !== "ALL" && {
-          categoryId:
-            cleanString(
-              categoryId
-            ),
-        }),
-    };
-
-    const [
-      totalProducts,
-      activeProducts,
-      availableProducts,
-      outOfStockProducts,
-      featuredProducts,
-      bestSellerProducts,
-      deletedProducts,
-      stockAggregate,
-    ] =
-      await prisma.$transaction([
-        prisma.martProduct.count({
-          where:
-            baseWhere,
-        }),
-
-        prisma.martProduct.count({
-          where: {
-            ...baseWhere,
-            isActive:
-              true,
+      const variantWhere = {
+        deletedAt:
+          null,
+        ...(storeId && {
+          product: {
+            storeId,
+            deletedAt:
+              null,
           },
         }),
+      };
 
-        prisma.martProduct.count({
-          where: {
-            ...baseWhere,
-            isActive:
-              true,
-            isAvailable:
-              true,
-            stock: {
-              gt: 0,
+      const [
+        totalProducts,
+        activeProducts,
+        availableProducts,
+        featuredProducts,
+        popularProducts,
+        bestSellerProducts,
+        totalVariants,
+        activeVariants,
+        availableVariants,
+        outOfStockVariants,
+        lowStockVariants,
+        totalStockAggregate,
+      ] =
+        await prisma.$transaction([
+          prisma.martProduct.count({
+            where:
+              productWhere,
+          }),
+
+          prisma.martProduct.count({
+            where: {
+              ...productWhere,
+              isActive:
+                true,
             },
-          },
-        }),
+          }),
 
-        prisma.martProduct.count({
-          where: {
-            ...baseWhere,
-            stock: {
-              lte: 0,
+          prisma.martProduct.count({
+            where: {
+              ...productWhere,
+              isAvailable:
+                true,
             },
-          },
-        }),
+          }),
 
-        prisma.martProduct.count({
-          where: {
-            ...baseWhere,
-            isFeatured:
-              true,
-          },
-        }),
-
-        prisma.martProduct.count({
-          where: {
-            ...baseWhere,
-            isBestSeller:
-              true,
-          },
-        }),
-
-        prisma.martProduct.count({
-          where: {
-            deletedAt: {
-              not: null,
+          prisma.martProduct.count({
+            where: {
+              ...productWhere,
+              isFeatured:
+                true,
             },
+          }),
 
-            ...(storeId &&
-              storeId !== "ALL" && {
-                storeId:
-                  cleanString(
-                    storeId
-                  ),
-              }),
+          prisma.martProduct.count({
+            where: {
+              ...productWhere,
+              isPopular:
+                true,
+            },
+          }),
 
-            ...(categoryId &&
-              categoryId !== "ALL" && {
-                categoryId:
-                  cleanString(
-                    categoryId
-                  ),
-              }),
-          },
-        }),
+          prisma.martProduct.count({
+            where: {
+              ...productWhere,
+              isBestSeller:
+                true,
+            },
+          }),
 
-        prisma.martProduct.aggregate({
-          where:
-            baseWhere,
+          prisma.martProductVariant.count({
+            where:
+              variantWhere,
+          }),
 
-          _sum: {
-            stock: true,
-          },
+          prisma.martProductVariant.count({
+            where: {
+              ...variantWhere,
+              isActive:
+                true,
+            },
+          }),
 
-          _avg: {
-            price: true,
-            costPrice: true,
-          },
-        }),
-      ]);
+          prisma.martProductVariant.count({
+            where: {
+              ...variantWhere,
+              isActive:
+                true,
+              isAvailable:
+                true,
+              stock: {
+                gt: 0,
+              },
+            },
+          }),
 
-    const stats = {
-      totalProducts,
-      activeProducts,
-      availableProducts,
-      outOfStockProducts,
-      featuredProducts,
-      bestSellerProducts,
-      deletedProducts,
+          prisma.martProductVariant.count({
+            where: {
+              ...variantWhere,
+              stock:
+                0,
+            },
+          }),
 
-      totalStock:
-        stockAggregate._sum.stock ??
-        0,
+          prisma.martProductVariant.count({
+            where: {
+              ...variantWhere,
+              stock: {
+                gt: 0,
+                lte: 10,
+              },
+            },
+          }),
 
-      averageSellingPrice:
-        stockAggregate._avg.price ??
-        0,
+          prisma.martProductVariant.aggregate({
+            where:
+              variantWhere,
+            _sum: {
+              stock:
+                true,
+            },
+          }),
+        ]);
 
-      averageCostPrice:
-        stockAggregate._avg.costPrice ??
-        0,
-    };
+      const stats = {
+        totalProducts,
+        activeProducts,
+        inactiveProducts:
+          totalProducts -
+          activeProducts,
 
-    return res.json({
-      success: true,
-      stats,
-      data: stats,
-    });
-  } catch (error) {
-    return handleMartProductError(
-      res,
-      error,
-      "fetch statistics"
-    );
-  }
-};
+        availableProducts,
+        unavailableProducts:
+          totalProducts -
+          availableProducts,
+
+        featuredProducts,
+        popularProducts,
+        bestSellerProducts,
+
+        totalVariants,
+        activeVariants,
+        availableVariants,
+        outOfStockVariants,
+        lowStockVariants,
+
+        totalStock:
+          totalStockAggregate
+            ._sum
+            .stock || 0,
+      };
+
+      return res.json({
+        success: true,
+        message:
+          "KartoMart product statistics fetched successfully",
+        stats,
+        data:
+          stats,
+      });
+    } catch (error) {
+      return handleMartProductError(
+        res,
+        error,
+        "fetch statistics"
+      );
+    }
+  };
+
+/* ============================================================
+   OPTIONAL ALIASES
+
+   These aliases help if an older routes file used slightly
+   different controller names.
+============================================================ */
+
+export const createMartVariant =
+  createMartProductVariant;
+
+export const getMartVariants =
+  getMartProductVariants;
+
+export const updateMartVariant =
+  updateMartProductVariant;
+
+export const deleteMartVariant =
+  deleteMartProductVariant;
+
+export const restoreMartVariant =
+  restoreMartProductVariant;
+
+export const hardDeleteMartVariant =
+  hardDeleteMartProductVariant;
