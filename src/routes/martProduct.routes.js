@@ -25,10 +25,10 @@ import {
 
 import {
   protect,
-  authorize,
+  allowRoles,
 } from "../middleware/auth.middleware.js";
 
-import upload from "../middleware/upload.middleware.js";
+import { upload } from "../middleware/upload.middleware.js";
 
 const router = express.Router();
 
@@ -66,7 +66,7 @@ router.get(
 router.get(
   "/stats",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   getMartProductStats
 );
 
@@ -89,7 +89,7 @@ router.get(
 router.patch(
   "/bulk-status",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   bulkUpdateMartProductStatus
 );
 
@@ -137,7 +137,7 @@ router.patch(
 router.post(
   "/",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   upload.single("image"),
   createMartProduct
 );
@@ -168,7 +168,7 @@ router.post(
 router.get(
   "/",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   getMartProducts
 );
 
@@ -187,7 +187,7 @@ router.get(
 router.patch(
   "/:id/status",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   updateMartProductStatus
 );
 
@@ -205,7 +205,7 @@ router.patch(
 router.patch(
   "/:id/availability",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   updateMartProductAvailability
 );
 
@@ -223,7 +223,7 @@ router.patch(
 router.patch(
   "/:id/featured",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   updateMartProductFeatured
 );
 
@@ -241,7 +241,7 @@ router.patch(
 router.patch(
   "/:id/best-seller",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   updateMartProductBestSeller
 );
 
@@ -265,7 +265,7 @@ router.patch(
 router.patch(
   "/:id/stock",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   adjustMartProductStock
 );
 
@@ -281,7 +281,7 @@ router.patch(
 router.patch(
   "/:id/restore",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   restoreMartProduct
 );
 
@@ -300,7 +300,7 @@ router.patch(
 router.delete(
   "/:id/hard",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   hardDeleteMartProduct
 );
 
@@ -314,7 +314,7 @@ router.delete(
 router.get(
   "/:id",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   getMartProductById
 );
 
@@ -332,7 +332,7 @@ router.get(
 router.put(
   "/:id",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   upload.single("image"),
   updateMartProduct
 );
@@ -345,7 +345,7 @@ router.put(
 router.patch(
   "/:id",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   upload.single("image"),
   updateMartProduct
 );
@@ -360,7 +360,7 @@ router.patch(
 router.delete(
   "/:id",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   deleteMartProduct
 );
 

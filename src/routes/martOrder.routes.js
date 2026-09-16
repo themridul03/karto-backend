@@ -22,7 +22,7 @@ import {
 
 import {
   protect,
-  authorize,
+  allowRoles,
 } from "../middleware/auth.middleware.js";
 
 const router = express.Router();
@@ -185,7 +185,7 @@ router.get(
 router.get(
   "/admin/stats",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   getMartOrderStats
 );
 
@@ -215,7 +215,7 @@ router.get(
 router.get(
   "/admin",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   getMartOrders
 );
 
@@ -253,7 +253,7 @@ router.get(
 router.patch(
   "/admin/:id/status",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   updateMartOrderStatus
 );
 
@@ -273,7 +273,7 @@ router.patch(
 router.patch(
   "/admin/:id/rider",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   assignMartOrderRider
 );
 
@@ -290,7 +290,7 @@ router.patch(
 router.delete(
   "/admin/:id/rider",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   unassignMartOrderRider
 );
 
@@ -310,7 +310,7 @@ router.delete(
 router.patch(
   "/admin/:id/payment-status",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   updateMartOrderPaymentStatus
 );
 
@@ -325,7 +325,7 @@ router.patch(
 router.get(
   "/admin/:id",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   getMartOrderById
 );
 

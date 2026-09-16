@@ -23,10 +23,10 @@ import {
 
 import {
   protect,
-  authorize,
+  allowRoles,
 } from "../middleware/auth.middleware.js";
 
-import upload from "../middleware/upload.middleware.js";
+import { upload } from "../middleware/upload.middleware.js";
 
 const router = express.Router();
 
@@ -51,7 +51,7 @@ router.get(
 router.get(
   "/stats",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   getMartStoreStats
 );
 
@@ -62,7 +62,7 @@ router.get(
 router.patch(
   "/bulk-status",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   bulkUpdateMartStoreStatus
 );
 
@@ -73,7 +73,7 @@ router.patch(
 router.patch(
   "/reorder",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   reorderMartStores
 );
 
@@ -84,7 +84,7 @@ router.patch(
 router.post(
   "/",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   upload.single("image"),
   createMartStore
 );
@@ -96,7 +96,7 @@ router.post(
 router.get(
   "/",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   getMartStores
 );
 
@@ -114,7 +114,7 @@ router.get(
 router.patch(
   "/:id/active-status",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   updateMartStoreActiveStatus
 );
 
@@ -128,7 +128,7 @@ router.patch(
 router.patch(
   "/:id/open-status",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   updateMartStoreOpenStatus
 );
 
@@ -142,7 +142,7 @@ router.patch(
 router.patch(
   "/:id/accepting-orders",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   updateMartStoreAcceptingOrders
 );
 
@@ -156,7 +156,7 @@ router.patch(
 router.patch(
   "/:id/verification",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   updateMartStoreVerification
 );
 
@@ -167,7 +167,7 @@ router.patch(
 router.patch(
   "/:id/restore",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   restoreMartStore
 );
 
@@ -178,7 +178,7 @@ router.patch(
 router.delete(
   "/:id/hard",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   hardDeleteMartStore
 );
 
@@ -189,7 +189,7 @@ router.delete(
 router.get(
   "/:id",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   getMartStoreById
 );
 
@@ -200,7 +200,7 @@ router.get(
 router.put(
   "/:id",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   upload.single("image"),
   updateMartStore
 );
@@ -208,7 +208,7 @@ router.put(
 router.patch(
   "/:id",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   upload.single("image"),
   updateMartStore
 );
@@ -220,7 +220,7 @@ router.patch(
 router.delete(
   "/:id",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   deleteMartStore
 );
 

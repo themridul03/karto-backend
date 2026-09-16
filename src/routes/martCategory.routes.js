@@ -17,10 +17,10 @@ import {
 
 import {
   protect,
-  authorize,
+  allowRoles,
 } from "../middleware/auth.middleware.js";
 
-import upload from "../middleware/upload.middleware.js";
+import { upload } from "../middleware/upload.middleware.js";
 
 const router = express.Router();
 
@@ -55,7 +55,7 @@ router.get(
 router.get(
   "/stats",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   getMartCategoryStats
 );
 
@@ -78,7 +78,7 @@ router.get(
 router.patch(
   "/bulk-status",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   bulkUpdateMartCategoryStatus
 );
 
@@ -107,7 +107,7 @@ router.patch(
 router.patch(
   "/reorder",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   reorderMartCategories
 );
 
@@ -134,7 +134,7 @@ router.patch(
 router.post(
   "/",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   upload.single("image"),
   createMartCategory
 );
@@ -161,7 +161,7 @@ router.post(
 router.get(
   "/",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   getMartCategories
 );
 
@@ -180,7 +180,7 @@ router.get(
 router.patch(
   "/:id/status",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   updateMartCategoryStatus
 );
 
@@ -197,7 +197,7 @@ router.patch(
 router.patch(
   "/:id/restore",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   restoreMartCategory
 );
 
@@ -216,7 +216,7 @@ router.patch(
 router.delete(
   "/:id/hard",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   hardDeleteMartCategory
 );
 
@@ -230,7 +230,7 @@ router.delete(
 router.get(
   "/:id",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   getMartCategoryById
 );
 
@@ -257,7 +257,7 @@ router.get(
 router.put(
   "/:id",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   upload.single("image"),
   updateMartCategory
 );
@@ -270,7 +270,7 @@ router.put(
 router.patch(
   "/:id",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   upload.single("image"),
   updateMartCategory
 );
@@ -287,7 +287,7 @@ router.patch(
 router.delete(
   "/:id",
   protect,
-  authorize("ADMIN"),
+  allowRoles("ADMIN"),
   deleteMartCategory
 );
 
