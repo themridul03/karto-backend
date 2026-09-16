@@ -1604,8 +1604,17 @@ model ServiceArea {
 }
 
 // ======================================================
-// KARTOMART ENUMS
+// KARTOMART
+// Additive models only.
+// Existing Restaurant/MenuItem/CartItem/Order untouched.
 // ======================================================
+
+enum MartStoreType {
+  GROCERY
+  FRUITS_VEGETABLES
+  SUPERMARKET
+  GENERAL_STORE
+}
 
 enum MartProductUnit {
   G
@@ -1614,104 +1623,85 @@ enum MartProductUnit {
   L
   PCS
   PACK
+  BOX
   DOZEN
 }
 
 enum MartOrderStatus {
   PLACED
-  CONFIRMED
+  ACCEPTED_BY_VENDOR
   PACKING
-  READY
-  ASSIGNED
+  READY_FOR_PICKUP
+  ASSIGNED_TO_RIDER
+  PICKED_UP
   OUT_FOR_DELIVERY
   DELIVERED
   CANCELLED
 }
 
-enum MartStockMovementType {
-  ADD
-  REMOVE
-  SET
-  ORDER
-  CANCEL_RETURN
-  ADJUSTMENT
-}
-
 // ======================================================
 // MART STORE
-//
-// Karto owned / managed.
-//
-// Examples:
-// KartoMart Jalalabad
-// KartoMart Shahjahanpur
-// KartoMart Lucknow
-//
-// No restaurant vendor dependency.
 // ======================================================
 
 model MartStore {
-  id String @id @default(uuid())
+  id       String  @id @default(uuid())
+  vendorId String?
+  cityId   String?
 
-  cityId String
+  name String        @db.VarChar(255)
+  type MartStoreType @default(GROCERY)
 
-  name        String  @db.VarChar(150)
   description String?
-  imageUrl    String? @db.VarChar(550)
-  bannerUrl   String? @db.VarChar(550)
+  address     String  @db.VarChar(255)
+  phone       String? @db.VarChar(20)
+  email       String? @db.VarChar(255)
 
-  address   String?
+  imageUrl  String? @db.VarChar(550)
+  bannerUrl String? @db.VarChar(550)
+
   latitude  Decimal? @db.Decimal(10, 7)
   longitude Decimal? @db.Decimal(10, 7)
 
-  phone String? @db.VarChar(20)
+  rating       Decimal @default(0) @db.Decimal(3, 2)
+  totalReviews Int     @default(0)
 
-  minimumOrderAmount Decimal @default(0) @db.Decimal(10, 2)
+  deliveryFee  Decimal @default(0) @db.Decimal(10, 2)
+  minimumOrder Decimal @default(0) @db.Decimal(10, 2)
+  deliveryTime String  @default("30-45 mins") @db.VarChar(50)
 
-  deliveryFee       Decimal  @default(0) @db.Decimal(10, 2)
-  freeDeliveryAbove Decimal? @db.Decimal(10, 2)
-
-  platformFee Decimal @default(0) @db.Decimal(10, 2)
-
-  isActive          Boolean @default(true)
   isOpen            Boolean @default(true)
-  isVerified        Boolean @default(true)
+  isFeatured        Boolean @default(false)
   isAcceptingOrders Boolean @default(true)
+  isVerified        Boolean @default(false)
 
-  sortOrder Int @default(0)
+  openingTime  String?
+  closingTime  String?
+  weeklyOffDay String?
+
+  commission Decimal @default(0) @db.Decimal(5, 2)
 
   deletedAt DateTime?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   categories MartCategory[]
   products   MartProduct[]
   cartItems  MartCartItem[]
   orders     MartOrder[]
 
+  @@index([vendorId])
   @@index([cityId])
-  @@index([name])
-  @@index([isActive])
+  @@index([type])
   @@index([isOpen])
-  @@index([isVerified])
+  @@index([isFeatured])
   @@index([isAcceptingOrders])
-  @@index([sortOrder])
+  @@index([isVerified])
+  @@index([createdAt])
   @@index([deletedAt])
 }
 
 // ======================================================
 // MART CATEGORY
-//
-// Examples:
-// Grocery
-// Fruits
-// Vegetables
-// Dairy
-// Snacks
-// Beverages
-// Household
-// Personal Care
 // ======================================================
 
 model MartCategory {
@@ -1725,8 +1715,6 @@ model MartCategory {
   sortOrder Int     @default(0)
   isActive  Boolean @default(true)
 
-  deletedAt DateTime?
-
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1738,21 +1726,14 @@ model MartCategory {
   @@index([name])
   @@index([isActive])
   @@index([sortOrder])
-  @@index([deletedAt])
 }
 
 // ======================================================
 // MART PRODUCT
-//
-// Product master.
-//
-// Examples:
+// Example:
 // Tomato
-// Potato
 // Aashirvaad Atta
 // Amul Milk
-//
-// Price / MRP / stock are maintained in variants.
 // ======================================================
 
 model MartProduct {
@@ -1766,18 +1747,12 @@ model MartProduct {
 
   imageUrl String? @db.VarChar(550)
 
-  isActive     Boolean @default(true)
-  isAvailable  Boolean @default(true)
-  isFeatured   Boolean @default(false)
-  isPopular    Boolean @default(false)
-  isBestSeller Boolean @default(false)
-
-  sortOrder Int @default(0)
+  isAvailable Boolean @default(true)
+  isFeatured  Boolean @default(false)
+  isPopular   Boolean @default(false)
 
   rating       Decimal @default(0) @db.Decimal(3, 2)
   totalReviews Int     @default(0)
-
-  deletedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1785,28 +1760,21 @@ model MartProduct {
   store    MartStore     @relation(fields: [storeId], references: [id], onDelete: Cascade)
   category MartCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
-  variants       MartProductVariant[]
-  cartItems      MartCartItem[]
-  orderItems     MartOrderItem[]
-  stockMovements MartStockMovement[]
+  variants   MartProductVariant[]
+  cartItems  MartCartItem[]
+  orderItems MartOrderItem[]
 
   @@index([storeId])
   @@index([categoryId])
   @@index([name])
   @@index([brand])
-  @@index([isActive])
   @@index([isAvailable])
   @@index([isFeatured])
   @@index([isPopular])
-  @@index([isBestSeller])
-  @@index([sortOrder])
-  @@index([deletedAt])
 }
 
 // ======================================================
 // MART PRODUCT VARIANT
-//
-// Actual purchasable SKU.
 //
 // Tomato:
 // 250 G
@@ -1827,12 +1795,9 @@ model MartProductVariant {
   quantity Decimal         @db.Decimal(10, 3)
   unit     MartProductUnit
 
-  // Pricing
-  mrp       Decimal @db.Decimal(10, 2)
-  price     Decimal @db.Decimal(10, 2)
-  costPrice Decimal @default(0) @db.Decimal(10, 2)
+  mrp   Decimal @db.Decimal(10, 2)
+  price Decimal @db.Decimal(10, 2)
 
-  // Inventory
   stock Int @default(0)
 
   sku     String? @unique @db.VarChar(120)
@@ -1840,77 +1805,24 @@ model MartProductVariant {
 
   isDefault   Boolean @default(false)
   isAvailable Boolean @default(true)
-  isActive    Boolean @default(true)
-
-  sortOrder Int @default(0)
-
-  deletedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   product MartProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
 
-  cartItems      MartCartItem[]
-  orderItems     MartOrderItem[]
-  stockMovements MartStockMovement[]
+  cartItems  MartCartItem[]
+  orderItems MartOrderItem[]
 
   @@index([productId])
   @@index([unit])
   @@index([isAvailable])
-  @@index([isActive])
-  @@index([isDefault])
-  @@index([sortOrder])
   @@index([barcode])
-  @@index([deletedAt])
 }
 
 // ======================================================
-// MART STOCK MOVEMENT
-//
-// Inventory audit/history.
-//
-// ADD           -> new stock received
-// REMOVE        -> manual stock removed
-// SET           -> admin directly set stock
-// ORDER         -> stock consumed by order
-// CANCEL_RETURN -> cancelled order stock returned
-// ADJUSTMENT    -> stock correction
-// ======================================================
-
-model MartStockMovement {
-  id String @id @default(uuid())
-
-  productId String
-  variantId String
-
-  type MartStockMovementType
-
-  quantity Int
-
-  previousStock Int
-  newStock      Int
-
-  reason String?
-
-  orderId String?
-
-  createdAt DateTime @default(now())
-
-  product MartProduct        @relation(fields: [productId], references: [id], onDelete: Cascade)
-  variant MartProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
-
-  @@index([productId])
-  @@index([variantId])
-  @@index([orderId])
-  @@index([type])
-  @@index([createdAt])
-}
-
-// ======================================================
-// MART CART ITEM
-//
-// Completely separate from existing food CartItem.
+// MART CART
+// Existing food CartItem remains unchanged.
 // ======================================================
 
 model MartCartItem {
@@ -1923,7 +1835,6 @@ model MartCartItem {
 
   quantity Int @default(1)
 
-  // Snapshot at the time item was added.
   price      Decimal @db.Decimal(10, 2)
   totalPrice Decimal @db.Decimal(10, 2)
 
@@ -1945,137 +1856,107 @@ model MartCartItem {
 
 // ======================================================
 // MART ORDER
-//
-// Separate from existing restaurant Order.
-//
-// KartoMart is directly managed by Karto.
-// Therefore no restaurant/vendor commission dependency.
+// Separate from existing food Order.
 // ======================================================
 
 model MartOrder {
   id String @id @default(uuid())
 
-  userId  String
-  storeId String
-
+  userId    String
+  storeId   String
+  vendorId  String?
   riderId   String?
   addressId String?
 
   orderNumber String @unique @db.VarChar(50)
 
-  // ==================================================
-  // ORDER AMOUNTS
-  // ==================================================
-
-  itemTotal Decimal @default(0) @db.Decimal(10, 2)
-
+  itemTotal   Decimal @default(0) @db.Decimal(10, 2)
   deliveryFee Decimal @default(0) @db.Decimal(10, 2)
-
-  discount Decimal @default(0) @db.Decimal(10, 2)
-
-  taxAmount Decimal @default(0) @db.Decimal(10, 2)
-
+  discount    Decimal @default(0) @db.Decimal(10, 2)
+  taxAmount   Decimal @default(0) @db.Decimal(10, 2)
   platformFee Decimal @default(0) @db.Decimal(10, 2)
 
   totalAmount Decimal @db.Decimal(10, 2)
 
-  // ==================================================
-  // PAYMENT
-  //
-  // Uses existing PaymentMethod / PaymentStatus enums.
-  // ==================================================
-
   paymentMethod PaymentMethod @default(COD)
   paymentStatus PaymentStatus @default(PENDING)
-
-  paymentId String? @db.VarChar(255)
-
-  razorpayOrderId   String? @db.VarChar(255)
-  razorpayPaymentId String? @db.VarChar(255)
-
-  // ==================================================
-  // ORDER STATUS
-  // ==================================================
 
   status MartOrderStatus @default(PLACED)
 
   customerNote String?
 
-  cancellationReason String?
-
-  // ==================================================
-  // LIFECYCLE
-  // ==================================================
-
-  acceptedAt DateTime?
-  readyAt    DateTime?
-
-  assignedAt DateTime?
-
-  outForDeliveryAt DateTime?
-
+  acceptedAt  DateTime?
+  packingAt   DateTime?
+  readyAt     DateTime?
+  pickedAt    DateTime?
   deliveredAt DateTime?
-
   cancelledAt DateTime?
+
+  cancelReason String?
+  cancelledBy  String?
+
+  distanceKm Decimal? @db.Decimal(10, 2)
+
+  commissionableAmount     Decimal? @db.Decimal(10, 2)
+  commissionRate           Decimal? @db.Decimal(5, 2)
+  platformCommissionAmount Decimal? @db.Decimal(10, 2)
+  vendorSettlementAmount   Decimal? @db.Decimal(10, 2)
+
+  deliveryOtp          String?
+  deliveryOtpExpiresAt DateTime?
+  deliveryOtpVerified  Boolean   @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // ==================================================
-  // RELATIONS
-  // ==================================================
-
   store MartStore @relation(fields: [storeId], references: [id])
 
-  items         MartOrderItem[]
-  statusHistory MartOrderStatusHistory[]
+  items   MartOrderItem[]
+  history MartOrderStatusHistory[]
 
   @@index([userId])
   @@index([storeId])
+  @@index([vendorId])
   @@index([riderId])
-  @@index([addressId])
   @@index([status])
   @@index([paymentStatus])
+  @@index([paymentMethod])
   @@index([createdAt])
+  @@index([deliveredAt])
+  @@index([cancelledAt])
+  @@index([storeId, status, createdAt])
+  @@index([riderId, status, deliveredAt])
 }
 
 // ======================================================
 // MART ORDER ITEM
-//
-// Historical snapshot is stored here.
-//
-// If Tomato price changes tomorrow,
-// previous order still retains original values.
+// Snapshot keeps historical order information unchanged
+// even if product/variant is later changed.
 // ======================================================
 
 model MartOrderItem {
   id String @id @default(uuid())
 
   orderId   String
-  productId String
-  variantId String
+  productId String?
+  variantId String?
 
-  // Product snapshot
-  productName String @db.VarChar(255)
-
-  // Variant snapshot
-  variantLabel String @db.VarChar(100)
+  itemName     String  @db.VarChar(255)
+  variantLabel String? @db.VarChar(100)
 
   quantity Int
 
-  unit MartProductUnit
+  price      Decimal  @db.Decimal(10, 2)
+  mrp        Decimal? @db.Decimal(10, 2)
+  totalPrice Decimal  @db.Decimal(10, 2)
 
-  // Price snapshots
-  unitPrice Decimal @db.Decimal(10, 2)
-  mrp       Decimal @db.Decimal(10, 2)
-
-  totalPrice Decimal @db.Decimal(10, 2)
+  imageUrl String? @db.VarChar(550)
 
   createdAt DateTime @default(now())
 
-  order   MartOrder          @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  product MartProduct        @relation(fields: [productId], references: [id])
-  variant MartProductVariant @relation(fields: [variantId], references: [id])
+  order   MartOrder           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product MartProduct?        @relation(fields: [productId], references: [id], onDelete: SetNull)
+  variant MartProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
 
   @@index([orderId])
   @@index([productId])
@@ -2084,26 +1965,15 @@ model MartOrderItem {
 
 // ======================================================
 // MART ORDER STATUS HISTORY
-//
-// Example:
-//
-// PLACED
-// CONFIRMED
-// PACKING
-// READY
-// ASSIGNED
-// OUT_FOR_DELIVERY
-// DELIVERED
 // ======================================================
 
 model MartOrderStatusHistory {
-  id String @id @default(uuid())
-
+  id      String          @id @default(uuid())
   orderId String
+  status  MartOrderStatus
 
-  status MartOrderStatus
-
-  note String?
+  changedBy String?
+  note      String?
 
   createdAt DateTime @default(now())
 
@@ -2111,5 +1981,5 @@ model MartOrderStatusHistory {
 
   @@index([orderId])
   @@index([status])
-  @@index([createdAt])
+  @@index([changedBy])
 }

@@ -26,7 +26,11 @@ import couponRoutes from "./routes/coupon.routes.js";
 import pushRoutes from "./routes/push.routes.js";
 import pushTokenRoutes from "./routes/pushToken.routes.js";
 import uploadRoutes from "./routes/upload.routes.js";
-
+import martStoreRoutes from "./routes/martStore.routes.js";
+import martCategoryRoutes from "./routes/martCategory.routes.js";
+import martProductRoutes from "./routes/martProduct.routes.js";
+import martCartRoutes from "./routes/martCart.routes.js";
+import martOrderRoutes from "./routes/martOrder.routes.js";
 dotenv.config();
 
 const app = express();
@@ -350,7 +354,15 @@ app.use("/api/favorite", favoriteRoutes);
 
 /* Compatibility alias */
 app.use("/api/favorites", favoriteRoutes);
+app.use("/api/mart/stores", martStoreRoutes);
 
+app.use("/api/mart/categories", martCategoryRoutes);
+
+app.use("/api/mart/products", martProductRoutes);
+
+app.use("/api/mart/cart", martCartRoutes);
+
+app.use("/api/mart/orders", martOrderRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/admin", adminVendorRoutes);
