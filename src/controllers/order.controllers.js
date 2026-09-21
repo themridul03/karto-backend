@@ -64,7 +64,7 @@ const toNumber = (value) => Number(value || 0);
 const round2 = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
-const PLATFORM_FEE = round2(process.env.KARTO_PLATFORM_FEE || 5);
+const PLATFORM_FEE = round2(process.env.KARTO_PLATFORM_FEE || 0);
 const FREE_DELIVERY_MIN_ORDER = round2(
   process.env.KARTO_FREE_DELIVERY_MIN_ORDER || 99
 );
